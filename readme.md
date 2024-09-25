@@ -1,6 +1,6 @@
 # Wafy - Gestion des IP Bannies et Détection des Requêtes Malveillantes
 
-**Wafy** est un package Laravel développé par **bdsa** pour bannir automatiquement les adresses IP et détecter les requêtes malveillantes telles que les tentatives d'injection SQL.
+**Wafy** est un package Laravel développé par **Bdsa** pour bannir automatiquement les adresses IP et détecter les requêtes malveillantes telles que les tentatives d'injection SQL.
 
 ### Résumé
 
@@ -16,7 +16,7 @@ Ce fichier **README.md** explique les étapes pour installer, configurer et util
 
 ### 1. Ajouter le package à votre projet
 
-Dans le fichier `composer.json` de votre projet Laravel, ajoutez ce package comme un dépôt local :
+Dans le fichier `composer.json` de votre projet Laravel, ajoutez ce package :
 
 ```json
 "repositories": [
@@ -62,16 +62,19 @@ protected $middleware = [
 
 ### Commands Artisan
 
-Le package fournit également deux commands artisan pour gérer les IP bannies :
+Le package fournit également trois commandes artisan pour gérer les IP bannies :
 
+Bannir une IP :
 ```bash
 php artisan waf:ban {adresse_ip}
 ```
 
+Déban une IP :
 ```bash
 php artisan waf:unban {adresse_ip}
 ```
 
+Afficher les IP bannies :
 ```bash
 php artisan wafy:list
 ```
