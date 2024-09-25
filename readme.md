@@ -21,8 +21,8 @@ Dans le fichier `composer.json` de votre projet Laravel, ajoutez ce package comm
 ```json
 "repositories": [
     {
-        "type": "path",
-        "url": "packages/bdsa/wafy"
+        "type": "vcs",
+        "url": "https://github.com/tomakakwark/wafy"
     }
 ],
 
