@@ -27,59 +27,59 @@ Dans le fichier `composer.json` de votre projet Laravel, ajoutez ce package comm
 ],
 
 "require": {
-    "bdsa/wafy": "*"
+    "bdsa/wafy": "dev-main"
 }
+```
 
+```bash
 composer update
 
 php artisan vendor:publish --provider="Bdsa\Wafy\WafyServiceProvider"
 
 php artisan migrate
+```
 
---------------------------------------------------
+### Middlewares
 
-Middlewares
 Le package fournit deux middlewares principaux :
 
 BlockBannedIp : Bloque l'accès des IP bannies à l'application.
 DetectMaliciousRequests : Détecte les requêtes malveillantes (comme les tentatives d'injection SQL) et bannit automatiquement les adresses IP correspondantes.
 Pour les utiliser, ajoutez-les dans le fichier app/Http/Kernel.php de votre projet Laravel, dans la section $middleware ou $routeMiddleware :
 
+```php
 protected $middleware = [
     \Bdsa\Wafy\Middleware\BlockBannedIp::class,
     \Bdsa\Wafy\Middleware\DetectMaliciousRequests::class,
 ];
+```
 
---------------------------------------------------
+### Commands Artisan
 
-
-Commands Artisan
 Le package fournit également deux commands artisan pour gérer les IP bannies :
 
+```bash
 php artisan waf:ban {adresse_ip}
 php artisan waf:unban {adresse_ip}
+```
 
---------------------------------------------------
 
-
-Exemple de configuration :
-
+### Exemple de configuration :
+```php
 return [
     'patterns' => [
         '/(select\s.*from|union\s.*select|information_schema|concat|0x)/i',
         '/(\*.*from|where.*=.*\d)/i',
     ],
 ];
+```
 
 
 
---------------------------------------------------
-
-
-Exemple d'intégration dans les routes
+### Exemple d'intégration dans les routes
 Voici un exemple d'intégration des middlewares dans un groupe de routes :
 
-
+```php
 Route::group(['middleware' => ['block.banned.ip', 'detect.malicious.requests']], function () {
     Route::get('/', function () {
         return view('welcome');
@@ -87,3 +87,4 @@ Route::group(['middleware' => ['block.banned.ip', 'detect.malicious.requests']],
 
     // Autres routes ici
 });
+```
