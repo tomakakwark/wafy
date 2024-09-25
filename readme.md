@@ -35,9 +35,13 @@ Dans le fichier `composer.json` de votre projet Laravel, ajoutez ce package comm
 
 ```bash
 composer update
+```
 
+```bash
 php artisan vendor:publish --provider="Bdsa\Wafy\WafyServiceProvider"
+```
 
+```bash
 php artisan migrate
 ```
 
@@ -62,6 +66,9 @@ Le package fournit également deux commands artisan pour gérer les IP bannies :
 
 ```bash
 php artisan waf:ban {adresse_ip}
+```
+
+```bash
 php artisan waf:unban {adresse_ip}
 ```
 
