@@ -18,7 +18,7 @@ class WafyServiceProvider extends ServiceProvider
         ]);
 
         // Charger les migrations
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        //$this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
         // Charger les middlewares
         $router = $this->app['router'];
