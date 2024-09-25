@@ -25,7 +25,9 @@ Dans le fichier `composer.json` de votre projet Laravel, ajoutez ce package comm
         "url": "https://github.com/tomakakwark/wafy"
     }
 ],
+```
 
+```json
 "require": {
     "bdsa/wafy": "dev-main"
 }
