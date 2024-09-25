@@ -72,6 +72,10 @@ php artisan waf:ban {adresse_ip}
 php artisan waf:unban {adresse_ip}
 ```
 
+```bash
+php artisan wafy:list
+```
+
 
 ### Exemple de configuration :
 ```php

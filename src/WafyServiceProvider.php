@@ -30,6 +30,7 @@ class WafyServiceProvider extends ServiceProvider
             $this->commands([
                 \Bdsa\Wafy\Console\BanIp::class,
                 \Bdsa\Wafy\Console\UnbanIp::class,
+                \Bdsa\Wafy\Console\ListBannedIps::class,
             ]);
         }
     }
