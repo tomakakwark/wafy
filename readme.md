@@ -1,106 +1,142 @@
-# Wafy - Gestion des IP Bannies et Détection des Requêtes Malveillantes
+# Wafy - Laravel Firewall & Malicious Request Detector
 
-**Wafy** est un package Laravel développé par **Bdsa** pour bannir automatiquement les adresses IP et détecter les requêtes malveillantes telles que les tentatives d'injection SQL.
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![PHP](https://img.shields.io/badge/php-%3E%3D7.4-8892BF.svg)
+![Laravel](https://img.shields.io/badge/laravel-%5E8.0%7C%5E9.0%7C%5E10.0-FF2D20.svg)
 
-### Résumé
+**Wafy** is a robust Laravel package developed by **Bdsa** designed to automatically ban IP addresses and detect malicious requests, including SQL Injection, XSS, and more.
 
-Ce fichier **README.md** explique les étapes pour installer, configurer et utiliser le package **wafy** dans un projet Laravel. Il inclut des instructions pour :
+## Features
 
-- Ajouter le package via Composer.
-- Publier la configuration et la migration.
-- Appliquer la migration.
-- Utiliser les middlewares et les commandes artisan.
-- Configurer les patterns de détection des requêtes malveillantes.
+- 🛡️ **IP Banning**: Automatically block IPs engaging in suspicious activity.
+- 🕵️ **Malicious Request Detection**: Detects SQLi, XSS, LFI, and RCE attempts.
+- ⏱️ **Temporary & Permanent Bans**: Configurable ban durations.
+- ⚙️ **Customizable Patterns**: Define your own regex patterns for detection.
+- 🖥️ **Artisan Commands**: Easily manage banned IPs via CLI.
+
+---
 
 ## Installation
 
-### 1. Ajouter le package à votre projet
+### 1. Require with Composer
 
-Dans le fichier `composer.json` de votre projet Laravel, ajoutez ce package :
-
-```json
-"repositories": [
-    {
-        "type": "vcs",
-        "url": "https://github.com/tomakakwark/wafy"
-    }
-],
-```
-
-```json
-"require": {
-    "bdsa/wafy": "dev-main"
-}
-```
+Add the package to your project:
 
 ```bash
-composer update
+composer require bdsa/wafy
 ```
+
+### 2. Publish Configuration
+
+Publish the configuration file and migrations:
 
 ```bash
 php artisan vendor:publish --provider="Bdsa\Wafy\WafyServiceProvider"
 ```
 
+### 3. Run Migrations
+
+Create the `banned_ips` table:
+
 ```bash
 php artisan migrate
 ```
 
-### Middlewares
+---
 
-Le package fournit deux middlewares principaux :
+## Usage
 
-BlockBannedIp : Bloque l'accès des IP bannies à l'application.
-DetectMaliciousRequests : Détecte les requêtes malveillantes (comme les tentatives d'injection SQL) et bannit automatiquement les adresses IP correspondantes.
-Pour les utiliser, ajoutez-les dans le fichier app/Http/Kernel.php de votre projet Laravel, dans la section $middleware ou $routeMiddleware :
+### Middleware
+
+Wafy provides two key middlewares. Register them in your `app/Http/Kernel.php`:
 
 ```php
-protected $middleware = [
-    \Bdsa\Wafy\Middleware\BlockBannedIp::class,
-    \Bdsa\Wafy\Middleware\DetectMaliciousRequests::class,
+protected $middlewareAliases = [
+    'block.banned.ip' => \Bdsa\Wafy\Middleware\BlockBannedIp::class,
+    'detect.malicious.requests' => \Bdsa\Wafy\Middleware\DetectMaliciousRequests::class,
 ];
 ```
 
-### Commands Artisan
+#### Protecting Routes
 
-Le package fournit également trois commandes artisan pour gérer les IP bannies :
-
-Bannir une IP :
-```bash
-php artisan waf:ban {adresse_ip}
-```
-
-Déban une IP :
-```bash
-php artisan waf:unban {adresse_ip}
-```
-
-Afficher les IP bannies :
-```bash
-php artisan wafy:list
-```
-
-
-### Exemple de configuration :
-```php
-return [
-    'patterns' => [
-        '/(select\s.*from|union\s.*select|information_schema|concat|0x)/i',
-        '/(\*.*from|where.*=.*\d)/i',
-    ],
-];
-```
-
-
-
-### Exemple d'intégration dans les routes
-Voici un exemple d'intégration des middlewares dans un groupe de routes :
+Apply the middleware to your routes or groups:
 
 ```php
 Route::group(['middleware' => ['block.banned.ip', 'detect.malicious.requests']], function () {
     Route::get('/', function () {
         return view('welcome');
     });
-
-    // Autres routes ici
+    
+    // Your protected routes
 });
 ```
+
+### Artisan Commands
+
+Manage banned IPs directly from the terminal:
+
+- **Ban an IP manually:**
+  ```bash
+  php artisan wafy:ban {ip_address}
+  ```
+
+- **Unban an IP:**
+  ```bash
+  php artisan wafy:unban {ip_address}
+  ```
+
+- **List all banned IPs:**
+  ```bash
+  php artisan wafy:list
+  ```
+
+- **Enable/Disable WAF:**
+  ```bash
+  php artisan wafy:mode {enable|disable}
+  ```
+
+---
+
+## Configuration
+
+The configuration file is located at `config/wafy.php`. You can customize the detection patterns here.
+
+Default protection covers:
+- **SQL Injection (SQLi)**: `UNION SELECT`, common SQL verbs, hex encoding.
+- **Local File Inclusion (LFI)**: Directory traversal (`../`), system files (`/etc/passwd`).
+- **Cross-Site Scripting (XSS)**: Script tags, event handlers (`onload`, `onerror`).
+- **Remote Code Execution (RCE)**: Shell commands (`cat`, `wget`), PHP execution functions.
+
+Example `config/wafy.php`:
+
+```php
+return [
+    'enabled' => env('WAFY_ENABLED', true),
+    'patterns' => [
+        '/(union(\s+all)?\s+select)/i',
+        '/(select\s+.*\s+from|delete\s+from|update\s+.*\s+set)/i',
+        '/(<script.*?>.*?<\/script>)/is',
+        // Add your custom patterns here
+    ],
+    'allowed_ips' => [
+        '127.0.0.1', // Localhost
+        '192.168.1.1', // Office IP
+    ],
+];
+```
+
+---
+
+## Testing
+
+To run the package tests:
+
+```bash
+vendor/bin/phpunit
+```
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

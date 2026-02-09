@@ -13,11 +13,24 @@ class DetectMaliciousRequests
     {
         $clientIp = $request->ip();
 
+        // Check Allowed IPs (Whitelist)
+        $allowedIps = config('wafy.allowed_ips', []);
+        if (in_array($clientIp, $allowedIps)) {
+            return $next($request);
+        }
+
+        // Check Cache first (runtime override), then Config (default)
+        $isEnabled = cache()->get('wafy.enabled', config('wafy.enabled', true));
+
+        if (!$isEnabled) {
+            return $next($request);
+        }
+
         // Détection des patterns malveillants
         $patterns = config('wafy.patterns');
 
-        $queryString = $request->getQueryString();
-        $requestBody = json_encode($request->all());
+        $queryString = $request->getQueryString() ?? '';
+        $requestBody = json_encode($request->all(), JSON_UNESCAPED_SLASHES);
 
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $queryString) || preg_match($pattern, $requestBody)) {

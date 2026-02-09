@@ -13,8 +13,8 @@ class WafyServiceProvider extends ServiceProvider
     {
         // Publier la migration et le fichier de configuration
         $this->publishes([
-            __DIR__.'/../database/migrations/create_banned_ips_table.php' => database_path('migrations/'.date('Y_m_d_His').'_create_banned_ips_table.php'),
-            __DIR__.'/../config/wafy.php' => config_path('wafy.php'),
+            __DIR__ . '/../database/migrations/create_banned_ips_table.php' => database_path('migrations/' . date('Y_m_d_His') . '_create_banned_ips_table.php'),
+            __DIR__ . '/../config/wafy.php' => config_path('wafy.php'),
         ]);
 
         // Charger les migrations
@@ -28,9 +28,10 @@ class WafyServiceProvider extends ServiceProvider
         // Charger les commandes artisan
         if ($this->app->runningInConsole()) {
             $this->commands([
-                \Bdsa\Wafy\Console\BanIp::class,
-                \Bdsa\Wafy\Console\UnbanIp::class,
-                \Bdsa\Wafy\Console\ListBannedIps::class,
+                \Bdsa\Wafy\Console\BanIp::class ,
+                \Bdsa\Wafy\Console\UnbanIp::class ,
+                \Bdsa\Wafy\Console\ListBannedIps::class ,
+                \Bdsa\Wafy\Console\ToggleWafy::class ,
             ]);
         }
     }
@@ -40,6 +41,6 @@ class WafyServiceProvider extends ServiceProvider
      */
     public function register()
     {
-        $this->mergeConfigFrom(__DIR__.'/../config/wafy.php', 'wafy');
+        $this->mergeConfigFrom(__DIR__ . '/../config/wafy.php', 'wafy');
     }
 }

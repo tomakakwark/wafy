@@ -2,8 +2,6 @@
 
 ### nouvelles configuration
 
-- activer / désactiver le firewall
-- autoriser un IP
 - customiser les messages
 
 ### ajouter des notifications
@@ -14,7 +12,6 @@
 ### nouvelles fonctionnalités
 
 - ban temporaire
-- verrouillage avant ban
 - logs
 - autres vérifications (detect user agent, geoip, bot ...)
 

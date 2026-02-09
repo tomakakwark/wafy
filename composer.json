@@ -13,9 +13,18 @@
         "php": ">=7.4",
         "illuminate/support": "^8.0|^9.0|^10.0"
     },
+    "require-dev": {
+        "orchestra/testbench": "^8.0",
+        "phpunit/phpunit": "^9.0"
+    },
     "autoload": {
         "psr-4": {
             "Bdsa\\Wafy\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Bdsa\\Wafy\\Tests\\": "tests/"
         }
     },
     "extra": {
