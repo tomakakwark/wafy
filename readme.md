@@ -48,20 +48,17 @@ php artisan migrate
 
 ### Middleware
 
-Wafy provides two key middlewares. Register them in your `app/Http/Kernel.php`:
-
-```php
-protected $middlewareAliases = [
-    'block.banned.ip' => \Bdsa\Wafy\Middleware\BlockBannedIp::class,
-    'detect.malicious.requests' => \Bdsa\Wafy\Middleware\DetectMaliciousRequests::class,
-];
-```
+Wafy provides two key middlewares : BlockBannedIp & DetectMaliciousRequests.
 
 #### Protecting Routes
 
 Apply the middleware to your routes or groups:
 
 ```php
+
+use Bdsa\Wafy\Middleware\BlockBannedIp;
+use Bdsa\Wafy\Middleware\DetectMaliciousRequests;
+
 Route::group(['middleware' => ['block.banned.ip', 'detect.malicious.requests']], function () {
     Route::get('/', function () {
         return view('welcome');
