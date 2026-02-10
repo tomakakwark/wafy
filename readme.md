@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![PHP](https://img.shields.io/badge/php-%3E%3D7.4-8892BF.svg)
-![Laravel](https://img.shields.io/badge/laravel-%5E8.0%7C%5E9.0%7C%5E10.0-FF2D20.svg)
+![Laravel](https://img.shields.io/badge/laravel-%5E8.0%7C%5E9.0%7C%5E10.0%7C%5E11.0%7C%5E12.0-FF2D20.svg)
 
 **Wafy** is a robust Laravel package developed by **Bdsa** designed to automatically ban IP addresses and detect malicious requests, including SQL Injection, XSS, and more.
 
