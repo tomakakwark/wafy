@@ -11,7 +11,6 @@
 
 ### nouvelles fonctionnalités
 
-- ban temporaire
-- logs
+- ban temporaire, trouver les meilleures options donnant un ban temporaire et non définitif
 - autres vérifications (detect user agent, geoip, bot ...)
 

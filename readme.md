@@ -74,7 +74,7 @@ Manage banned IPs directly from the terminal:
 
 - **Ban an IP manually:**
   ```bash
-  php artisan wafy:ban {ip_address}
+  php artisan wafy:ban {ip_address} [--reason="Your reason"]
   ```
 
 - **Unban an IP:**
@@ -90,6 +90,11 @@ Manage banned IPs directly from the terminal:
 - **Enable/Disable WAF:**
   ```bash
   php artisan wafy:mode {enable|disable}
+  ```
+
+- **Set Action Mode (Block or Log-Only):**
+  ```bash
+  php artisan wafy:action {block|log}
   ```
 
 ---
@@ -118,6 +123,10 @@ return [
     'allowed_ips' => [
         '127.0.0.1', // Localhost
         '192.168.1.1', // Office IP
+    ],
+    'notifications' => [
+        'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
+        'email' => env('WAFY_NOTIFICATION_EMAIL', 'admin@example.com'),
     ],
 ];
 ```

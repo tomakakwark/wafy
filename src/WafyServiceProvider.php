@@ -20,6 +20,9 @@ class WafyServiceProvider extends ServiceProvider
         // Charger les migrations
         //$this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
+        // Charger les vues
+        $this->loadViewsFrom(__DIR__ . '/../resources/views', 'wafy');
+
         // Charger les middlewares
         $router = $this->app['router'];
         $router->aliasMiddleware('block.banned.ip', \Bdsa\Wafy\Middleware\BlockBannedIp::class);
@@ -32,6 +35,7 @@ class WafyServiceProvider extends ServiceProvider
                 \Bdsa\Wafy\Console\UnbanIp::class ,
                 \Bdsa\Wafy\Console\ListBannedIps::class ,
                 \Bdsa\Wafy\Console\ToggleWafy::class ,
+                \Bdsa\Wafy\Console\SetAction::class ,
             ]);
         }
     }

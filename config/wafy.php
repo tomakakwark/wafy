@@ -1,8 +1,14 @@
 <?php
 
 return [
+    'action' => env('WAFY_ACTION', 'block'), // 'block' or 'log'
     'enabled' => env('WAFY_ENABLED', true),
     'allowed_ips' => [],
+    'notifications' => [
+        'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
+        'email' => env('WAFY_NOTIFICATION_EMAIL', 'admin@example.com'),
+    ],
+
     'patterns' => [
         // --- SQL Injection (SQLi) ---
         '/(union(\s+all)?\s+select)/i', // UNION SELECT

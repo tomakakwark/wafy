@@ -61,6 +61,6 @@ class BlockBannedIpTest extends TestCase
         $response->assertStatus(200);
         $response->assertSee('OK');
 
-        $this->assertDatabaseMissing('banned_ips', ['ip_address' => '127.0.0.1']);
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
     }
 }

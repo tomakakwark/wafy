@@ -14,7 +14,23 @@ class CommandTest extends TestCase
             ->expectsOutput('L\'IP 1.2.3.4 a été bannie avec succès.')
             ->assertExitCode(0);
 
-        $this->assertDatabaseHas('banned_ips', ['ip_address' => '1.2.3.4']);
+        $this->assertDatabaseHas('wafy_banned_ips', [
+            'ip_address' => '1.2.3.4',
+            'reason' => 'Manual ban via Artisan command',
+        ]);
+    }
+
+    /** @test */
+    public function it_bans_an_ip_with_custom_reason()
+    {
+        $this->artisan('wafy:ban', ['ip' => '1.2.3.4', '--reason' => 'Spamming'])
+            ->expectsOutput('L\'IP 1.2.3.4 a été bannie avec succès.')
+            ->assertExitCode(0);
+
+        $this->assertDatabaseHas('wafy_banned_ips', [
+            'ip_address' => '1.2.3.4',
+            'reason' => 'Spamming',
+        ]);
     }
 
     /** @test */
@@ -26,7 +42,7 @@ class CommandTest extends TestCase
             ->expectsOutput('L\'IP 1.2.3.4 a été débannie avec succès.')
             ->assertExitCode(0);
 
-        $this->assertDatabaseMissing('banned_ips', ['ip_address' => '1.2.3.4']);
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '1.2.3.4']);
     }
 
     /** @test */

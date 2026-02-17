@@ -49,6 +49,6 @@ class AllowedIpTest extends TestCase
 
         // 3. Vérifier qu'elle passe sans être bannie
         $response->assertStatus(200);
-        $this->assertDatabaseMissing('banned_ips', ['ip_address' => '127.0.0.1']);
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
     }
 }

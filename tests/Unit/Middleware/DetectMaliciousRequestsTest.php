@@ -30,7 +30,11 @@ class DetectMaliciousRequestsTest extends TestCase
     {
         $response = $this->get('/test-waf?q=UNION SELECT 1,2,3');
         $response->assertStatus(403);
-        $this->assertDatabaseHas('banned_ips', ['ip_address' => '127.0.0.1']);
+
+        $this->assertDatabaseHas('wafy_banned_ips', [
+            'ip_address' => '127.0.0.1',
+            'reason' => 'Malicious pattern detected: /(union(\s+all)?\s+select)/i'
+        ]);
     }
 
     /** @test */
@@ -38,7 +42,11 @@ class DetectMaliciousRequestsTest extends TestCase
     {
         $response = $this->postJson('/test-waf', ['comment' => '<script>alert(1)</script>']);
         $response->assertStatus(403);
-        $this->assertDatabaseHas('banned_ips', ['ip_address' => '127.0.0.1']);
+
+        $this->assertDatabaseHas('wafy_banned_ips', [
+            'ip_address' => '127.0.0.1',
+            'reason' => 'Malicious pattern detected: /(<script.*?>.*?<\/script>)/is'
+        ]);
     }
 
     /** @test */
@@ -46,5 +54,45 @@ class DetectMaliciousRequestsTest extends TestCase
     {
         $response = $this->get('/test-waf?file=../../etc/passwd');
         $response->assertStatus(403);
+    }
+
+    /** @test */
+    public function it_does_not_block_requests_in_log_mode()
+    {
+        // Set mode to 'log'
+        \Illuminate\Support\Facades\Cache::put('wafy.action', 'log');
+
+        // Send malicious request
+        $response = $this->get('/test-waf?q=UNION SELECT 1,2,3');
+
+        // Should be allowed
+        $response->assertStatus(200);
+        $response->assertSee('Safe');
+
+        // Should NOT be banned in DB
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
+    }
+
+    /** @test */
+    public function it_sends_email_notification_when_ip_is_banned()
+    {
+        // Enable notifications
+        config(['wafy.notifications.enabled' => true]);
+        config(['wafy.notifications.email' => 'admin@test.com']);
+
+        \Illuminate\Support\Facades\Mail::fake();
+
+        // Send malicious request (Block mode by default)
+        $this->postJson('/test-waf', ['comment' => '<script>alert(1)</script>'])
+            ->assertStatus(403);
+
+        // Assert Email Sent
+        \Illuminate\Support\Facades\Mail::assertSent(\Bdsa\Wafy\Mail\IpBannedEmail::class , function ($mail) {
+            return $mail->hasTo('admin@test.com') &&
+            $mail->ip === '127.0.0.1';
+        });
+
+        // Assert DB has ban
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
     }
 }
