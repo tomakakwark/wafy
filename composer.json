@@ -1,12 +1,12 @@
 {
     "name": "bdsa/wafy",
-    "description": "Un package Laravel pour bannir les adresses IP automatiquement et détecter les requêtes malveillantes.",
+    "description": "A Laravel package to automatically ban IP addresses and detect malicious requests.",
     "type": "library",
     "license": "MIT",
     "authors": [
         {
             "name": "Bdsa",
-            "email": "waf@bdsa.dev"
+            "email": "wafy@bdsa.agency"
         }
     ],
     "require": {
