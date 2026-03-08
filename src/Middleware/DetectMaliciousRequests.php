@@ -31,12 +31,14 @@ class DetectMaliciousRequests
 
         $queryString = $request->getQueryString() ?? '';
         $requestBody = json_encode($request->all(), JSON_UNESCAPED_SLASHES);
+        $userAgent = $request->header('User-Agent') ?? '';
+        $referer = $request->header('Referer') ?? '';
 
         // Check action mode (block vs log)
         $action = cache('wafy.action', config('wafy.action', 'block'));
 
         foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $queryString) || preg_match($pattern, $requestBody)) {
+            if (preg_match($pattern, $queryString) || preg_match($pattern, $requestBody) || preg_match($pattern, $userAgent) || preg_match($pattern, $referer)) {
                 Log::warning("Wafy: Malicious pattern detected form {$clientIp}. Pattern: {$pattern}");
 
                 // If in Log-Only mode, ensure we log but DO NOT BLOCK

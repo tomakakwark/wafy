@@ -6,7 +6,6 @@
 
 ### ajouter des notifications
 
-- mail
 - slack
 
 ### nouvelles fonctionnalités
