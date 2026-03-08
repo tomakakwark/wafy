@@ -126,7 +126,9 @@ return [
     ],
     'notifications' => [
         'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
+        'channels' => ['mail'], // Choose 'mail', 'slack' or both
         'email' => env('WAFY_NOTIFICATION_EMAIL', 'admin@example.com'),
+        'slack_webhook' => env('WAFY_SLACK_WEBHOOK', ''),
     ],
 ];
 ```

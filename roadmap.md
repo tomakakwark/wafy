@@ -6,7 +6,8 @@
 
 ### ajouter des notifications
 
-- slack
+- teams
+- discord
 
 ### nouvelles fonctionnalités
 

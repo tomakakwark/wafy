@@ -26,6 +26,14 @@ class DetectMaliciousRequests
             return $next($request);
         }
 
+        // Check action mode (block vs log)
+        $action = cache('wafy.action', config('wafy.action', 'block'));
+
+        // Fast early exit: Check if already banned and skip patterns
+        if (BannedIp::where('ip_address', $clientIp)->exists() && $action !== 'log') {
+            return response()->json(['message' => 'Votre IP est bannie.'], 403);
+        }
+
         // Détection des patterns malveillants
         $patterns = config('wafy.patterns');
 
@@ -34,11 +42,10 @@ class DetectMaliciousRequests
         $userAgent = $request->header('User-Agent') ?? '';
         $referer = $request->header('Referer') ?? '';
 
-        // Check action mode (block vs log)
-        $action = cache('wafy.action', config('wafy.action', 'block'));
+        $subjectToTest = $queryString . ' | ' . $requestBody . ' | ' . $userAgent . ' | ' . $referer;
 
         foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $queryString) || preg_match($pattern, $requestBody) || preg_match($pattern, $userAgent) || preg_match($pattern, $referer)) {
+            if (preg_match($pattern, $subjectToTest)) {
                 Log::warning("Wafy: Malicious pattern detected form {$clientIp}. Pattern: {$pattern}");
 
                 // If in Log-Only mode, ensure we log but DO NOT BLOCK
@@ -47,28 +54,25 @@ class DetectMaliciousRequests
                     continue; // Skip onto the next pattern or just finish loop effectively
                 }
 
-                if (!BannedIp::where('ip_address', $clientIp)->exists()) {
-                    $banData = [
-                        'ip_address' => $clientIp,
-                        'reason' => "Malicious pattern detected: {$pattern}",
-                        'request_data' => [
-                            'method' => $request->method(),
-                            'url' => $request->fullUrl(),
-                            'input' => $request->all(),
-                        ],
-                    ];
+                $banData = [
+                    'ip_address' => $clientIp,
+                    'reason' => "Malicious pattern detected: {$pattern}",
+                    'request_data' => [
+                        'method' => $request->method(),
+                        'url' => $request->fullUrl(),
+                        'input' => $request->all(),
+                    ],
+                ];
 
-                    BannedIp::create($banData);
+                $bannedIpModel = BannedIp::create($banData);
 
-                    // Send Email Notification
-                    if (config('wafy.notifications.enabled')) {
-                        try {
-                            \Illuminate\Support\Facades\Mail::to(config('wafy.notifications.email'))
-                                ->send(new \Bdsa\Wafy\Mail\IpBannedEmail($banData));
-                        }
-                        catch (\Exception $e) {
-                            Log::error("Wafy: Failed to send ban notification email: " . $e->getMessage());
-                        }
+                // Send Notifications
+                if (config('wafy.notifications.enabled')) {
+                    try {
+                        $bannedIpModel->notify(new \Bdsa\Wafy\Notifications\IpBannedNotification($bannedIpModel));
+                    }
+                    catch (\Exception $e) {
+                        Log::error("Wafy: Failed to send ban notification: " . $e->getMessage());
                     }
                 }
 

@@ -6,7 +6,9 @@ return [
     'allowed_ips' => [],
     'notifications' => [
         'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
+        'channels' => ['mail'], // Can be ['mail', 'slack']
         'email' => env('WAFY_NOTIFICATION_EMAIL', 'admin@example.com'),
+        'slack_webhook' => env('WAFY_SLACK_WEBHOOK', ''),
     ],
 
     'patterns' => [
