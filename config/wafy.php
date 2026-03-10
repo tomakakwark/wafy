@@ -17,7 +17,7 @@ return [
         '/(select\s+.*\s+from|delete\s+from|update\s+.*\s+set|insert\s+into)/i', // Basic SQL commands
         '/(select[\s\S]*?from|union[\s\S]*?select|insert[\s\S]*?into|update[\s\S]*?set|delete[\s\S]*?from)/i', // Packed/obfuscated SQL commands
         '/(information_schema\.|table_schema|table_name)/i', // Schema probing
-        '/(0x[0-9a-f]{2,})/i', // Hex encoded data
+        '/\b(0x[0-9a-f]{2,})\b/i', // Hex encoded data
         '/(\/\*.*\*\/|--\s)/', // SQL Comments
         '/(waitfor\s+delay|benchmark\()/i', // Time-based blind SQLi
         '/(sleep\(\s*\d+\s*\))/i', // Sleep function

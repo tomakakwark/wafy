@@ -57,6 +57,37 @@ class DetectMaliciousRequestsTest extends TestCase
     }
 
     /** @test */
+    public function it_allows_legitimate_payloads_containing_0x()
+    {
+        // "0x" embedded inside a longer string
+        $response = $this->postJson('/test-waf', ['token' => 'a1b2c3d4e5f6g7h80x9i0j1k2l3m4n5']);
+        $response->assertStatus(200);
+        $response->assertSee('Safe');
+
+        // "0x" used at start of string but without word boundaries
+        $response = $this->postJson('/test-waf', ['id' => '0xdeadbeef_legit']);
+        $response->assertStatus(200);
+        $response->assertSee('Safe');
+    }
+
+    /** @test */
+    public function it_detects_sqli_hex_payload()
+    {
+        // Using "0x" exactly like in SQLi (with word boundaries)
+        $response = $this->get('/test-waf?q=SELECT 0x2727');
+        $response->assertStatus(403);
+
+        $this->assertDatabaseHas('wafy_banned_ips', [
+            'ip_address' => '127.0.0.1',
+            'reason' => 'Malicious pattern detected: /\b(0x[0-9a-f]{2,})\b/i'
+        ]);
+
+        // Ensure another typical injection variant works (id=0x... parameter binding)
+        $response2 = $this->get('/test-waf?id=0x1a2b3c');
+        $response2->assertStatus(403);
+    }
+
+    /** @test */
     public function it_does_not_block_requests_in_log_mode()
     {
         // Set mode to 'log'
