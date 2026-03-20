@@ -42,7 +42,7 @@ class DetectMaliciousRequests
         $userAgent = $request->header('User-Agent') ?? '';
         $referer = $request->header('Referer') ?? '';
 
-        $subjectToTest = $queryString . ' | ' . $requestBody . ' | ' . $userAgent . ' | ' . $referer;
+        $subjectToTest = urldecode($queryString . ' | ' . $requestBody . ' | ' . $userAgent . ' | ' . $referer);
 
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, $subjectToTest)) {

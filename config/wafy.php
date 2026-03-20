@@ -16,6 +16,7 @@ return [
         '/(union(\s+all)?\s+select)/i', // UNION SELECT
         '/(select\s+.*\s+from|delete\s+from|update\s+.*\s+set|insert\s+into)/i', // Basic SQL commands
         '/(select[\s\S]*?from|union[\s\S]*?select|insert[\s\S]*?into|update[\s\S]*?set|delete[\s\S]*?from)/i', // Packed/obfuscated SQL commands
+        '/(?:select\s*\(.*?\)\s*from|union\s*\(.*?\)\s*select)/i', // Contre l'obfuscation par parenthèses `(select(id)from...)`
         '/(information_schema\.|table_schema|table_name)/i', // Schema probing
         '/\b(0x[0-9a-f]{2,})\b/i', // Hex encoded data
         '/(\/\*.*\*\/|--\s)/', // SQL Comments
@@ -30,7 +31,9 @@ return [
 
         // --- Cross-Site Scripting (XSS) ---
         '/(data:text\/(html|javascript);base64,)/i', // Base64 Data URI XSS
+        '/(?:data:[^\/]+\/[^;]+;base64,)/i', // Base64 Data URI XSS élargi
         '/(<script.*?>.*?<\/script>)/is', // Script tags
+        '/(?:%3C|%3e|<|>)script/i', // Variante brute pour pallier certains doubles-encodages
         '/(javascript:[^\s]*)/i', // Javascript pseudo-protocol
         '/(on(load|error|click|mouseover|submit|reset|focus|blur)=)/i', // Event handlers
         '/(<iframe.*?>|<iframe>)/i', // iFrames
