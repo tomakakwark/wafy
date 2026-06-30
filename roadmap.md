@@ -13,4 +13,4 @@
 
 - ban temporaire, trouver les meilleures options donnant un ban temporaire et non définitif
 - autres vérifications (detect user agent, geoip, bot ...)
-
+- ajouter une commande pour générer une notification (mail / slack) de test

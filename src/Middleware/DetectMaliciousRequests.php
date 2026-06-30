@@ -37,49 +37,72 @@ class DetectMaliciousRequests
         // Détection des patterns malveillants
         $patterns = config('wafy.patterns');
 
-        $queryString = $request->getQueryString() ?? '';
-        $requestBody = json_encode($request->all(), JSON_UNESCAPED_SLASHES);
-        $userAgent = $request->header('User-Agent') ?? '';
-        $referer = $request->header('Referer') ?? '';
+        $subjects = [
+            'QueryString' => $request->getQueryString() ?? '',
+            'RequestBody' => json_encode($request->all(), JSON_UNESCAPED_SLASHES),
+            'UserAgent' => $request->header('User-Agent') ?? '',
+            'Referer' => $request->header('Referer') ?? '',
+            'Path' => '/' . ltrim($request->path(), '/'),
+        ];
 
-        $subjectToTest = urldecode($queryString . ' | ' . $requestBody . ' | ' . $userAgent . ' | ' . $referer);
+        foreach ($subjects as $fieldName => $value) {
+            $decodedValue = $this->recursiveUrldecode($value);
 
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $subjectToTest)) {
-                Log::warning("Wafy: Malicious pattern detected form {$clientIp}. Pattern: {$pattern}");
+            foreach ($patterns as $pattern) {
+                if (preg_match($pattern, $decodedValue)) {
+                    Log::warning("Wafy: Malicious pattern detected form {$clientIp} in {$fieldName}. Pattern: {$pattern}");
 
-                // If in Log-Only mode, ensure we log but DO NOT BLOCK
-                if ($action === 'log') {
-                    Log::info("Wafy (Log-Only): Request allowed for {$clientIp}");
-                    continue; // Skip onto the next pattern or just finish loop effectively
-                }
-
-                $banData = [
-                    'ip_address' => $clientIp,
-                    'reason' => "Malicious pattern detected: {$pattern}",
-                    'request_data' => [
-                        'method' => $request->method(),
-                        'url' => $request->fullUrl(),
-                        'input' => $request->all(),
-                    ],
-                ];
-
-                $bannedIpModel = BannedIp::create($banData);
-
-                // Send Notifications
-                if (config('wafy.notifications.enabled')) {
-                    try {
-                        $bannedIpModel->notify(new \Bdsa\Wafy\Notifications\IpBannedNotification($bannedIpModel));
+                    // If in Log-Only mode, ensure we log but DO NOT BLOCK
+                    if ($action === 'log') {
+                        Log::info("Wafy (Log-Only): Request allowed for {$clientIp}");
+                        continue 2; // Move to next field
                     }
-                    catch (\Exception $e) {
-                        Log::error("Wafy: Failed to send ban notification: " . $e->getMessage());
-                    }
-                }
 
-                return response()->json(['message' => 'Votre IP est bannie.'], 403);
+                    $banData = [
+                        'ip_address' => $clientIp,
+                        'reason' => "Malicious pattern detected in {$fieldName}: {$pattern}",
+                        'request_data' => [
+                            'method' => $request->method(),
+                            'url' => $request->fullUrl(),
+                            'input' => $request->all(),
+                        ],
+                    ];
+
+                    $bannedIpModel = BannedIp::create($banData);
+
+                    // Send Notifications
+                    if (config('wafy.notifications.enabled')) {
+                        try {
+                            $bannedIpModel->notify(new \Bdsa\Wafy\Notifications\IpBannedNotification($bannedIpModel));
+                        } catch (\Exception $e) {
+                            Log::error("Wafy: Failed to send ban notification: " . $e->getMessage());
+                        }
+                    }
+
+                    return response()->json(['message' => 'Votre IP est bannie.'], 403);
+                }
             }
         }
 
         return $next($request);
+    }
+
+    /**
+     * Recursively urldecode a string to handle multi-encoded payloads.
+     */
+    private function recursiveUrldecode($string)
+    {
+        $prev = '';
+        $curr = $string;
+
+        // Limite à 5 décodages pour éviter les boucles infinies ou les attaques DoS
+        $maxDepth = 5;
+        while ($curr !== $prev && $maxDepth > 0) {
+            $prev = $curr;
+            $curr = urldecode($curr);
+            $maxDepth--;
+        }
+
+        return $curr;
     }
 }

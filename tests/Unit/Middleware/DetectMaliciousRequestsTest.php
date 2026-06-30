@@ -33,7 +33,7 @@ class DetectMaliciousRequestsTest extends TestCase
 
         $this->assertDatabaseHas('wafy_banned_ips', [
             'ip_address' => '127.0.0.1',
-            'reason' => 'Malicious pattern detected: /(union(\s+all)?\s+select)/i'
+            'reason' => 'Malicious pattern detected in QueryString: /(union(\s+all)?\s+select)/i'
         ]);
     }
 
@@ -45,7 +45,7 @@ class DetectMaliciousRequestsTest extends TestCase
 
         $this->assertDatabaseHas('wafy_banned_ips', [
             'ip_address' => '127.0.0.1',
-            'reason' => 'Malicious pattern detected: /(<script.*?>.*?<\/script>)/is'
+            'reason' => 'Malicious pattern detected in RequestBody: /(<script.*?>.*?<\/script>)/is'
         ]);
     }
 
@@ -79,7 +79,7 @@ class DetectMaliciousRequestsTest extends TestCase
 
         $this->assertDatabaseHas('wafy_banned_ips', [
             'ip_address' => '127.0.0.1',
-            'reason' => 'Malicious pattern detected: /\b(0x[0-9a-f]{2,})\b/i'
+            'reason' => 'Malicious pattern detected in QueryString: /\b(0x[0-9a-f]{2,})\b/i'
         ]);
 
         // Ensure another typical injection variant works (id=0x... parameter binding)
