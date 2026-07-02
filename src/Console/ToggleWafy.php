@@ -24,7 +24,7 @@ class ToggleWafy extends Command
         // Update the cache to persist the setting
         cache()->put('wafy.enabled', $isEnabled); // Stores indefinitely
 
-        $this->info("WAF has been slightly {$status}d.");
+        $this->info("WAF has been {$status}d.");
 
         return 0;
     }

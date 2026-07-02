@@ -25,7 +25,7 @@ class ToggleWafyTest extends TestCase
 
         // On exécute la commande pour désactiver
         $this->artisan('wafy:mode', ['status' => 'disable'])
-            ->expectsOutput('WAF has been slightly disabled.')
+            ->expectsOutput('WAF has been disabled.')
             ->assertExitCode(0);
 
         // On vérifie que le cache a bien été mis à jour
@@ -44,7 +44,7 @@ class ToggleWafyTest extends TestCase
 
         // On exécute la commande pour activer
         $this->artisan('wafy:mode', ['status' => 'enable'])
-            ->expectsOutput('WAF has been slightly enabled.')
+            ->expectsOutput('WAF has been enabled.')
             ->assertExitCode(0);
 
         // On vérifie que le cache est à true

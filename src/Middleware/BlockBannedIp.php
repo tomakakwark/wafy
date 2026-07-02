@@ -4,17 +4,20 @@ namespace Bdsa\Wafy\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Bdsa\Wafy\Concerns\HandlesClientIp;
 use Bdsa\Wafy\Models\BannedIp;
 
 class BlockBannedIp
 {
+    use HandlesClientIp;
+
     public function handle(Request $request, Closure $next)
     {
         $clientIp = $request->ip();
 
-        // Check Allowed IPs (Whitelist)
-        $allowedIps = config('wafy.allowed_ips', []);
-        if (in_array($clientIp, $allowedIps)) {
+        // Check Allowed IPs (Whitelist) — supports single IPs and CIDR ranges.
+        if ($this->isAllowed($clientIp)) {
             return $next($request);
         }
 
@@ -25,7 +28,15 @@ class BlockBannedIp
             return $next($request);
         }
 
-        $bannedIp = BannedIp::where('ip_address', $clientIp)->first();
+        try {
+            $bannedIp = BannedIp::forIp($clientIp)->first();
+        } catch (\Throwable $e) {
+            Log::error("Wafy: ban lookup failed for {$clientIp}: " . $e->getMessage());
+            if (!config('wafy.fail_open', true)) {
+                return response()->json(['message' => 'Service temporairement indisponible.'], 503);
+            }
+            return $next($request);
+        }
 
         if ($bannedIp) {
             // Si banned_until est null, c'est un ban permanent via DetectMaliciousRequests ou commande

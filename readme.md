@@ -97,11 +97,48 @@ Manage banned IPs directly from the terminal:
   php artisan wafy:action {block|log}
   ```
 
+> **ℹ️ Note — `wafy:mode` and `wafy:action` are temporary runtime overrides.**
+> These two commands store their state in the **cache**, so they are meant for
+> momentary situations (testing, incident response). Any cache flush
+> (`php artisan cache:clear`, `config:cache`, a deploy, a Redis restart…) resets
+> them, and Wafy falls back to the values in `config/wafy.php`. To change the
+> behaviour **permanently**, edit `config/wafy.php` (or the matching `WAFY_*`
+> environment variables) — that is the source of truth.
+
 ---
+
+## ⚠️ Running behind a reverse proxy / CDN (read this first)
+
+Wafy identifies clients by IP (`$request->ip()`) and can **ban** them. If your
+application runs behind a reverse proxy, load balancer or CDN (Nginx, Traefik,
+Cloudflare, AWS ALB…), you **must** configure Laravel's `TrustProxies`
+middleware so that `$request->ip()` returns the real client IP.
+
+- If you **don't** configure trusted proxies, every request appears to come from
+  the proxy. The first malicious request then bans your own proxy, cutting off
+  **all** traffic.
+- If you trust proxies with a blanket `*`, the `X-Forwarded-For` header becomes
+  attacker-controlled: an attacker can spoof a clean IP to bypass bans, or forge
+  a victim's IP to get it banned. Only trust the specific proxy ranges you use.
+
+Also add your proxy / CDN ranges and any critical infrastructure to
+`wafy.allowed_ips` (CIDR ranges are supported) so they can never be banned.
 
 ## Configuration
 
-The configuration file is located at `config/wafy.php`. You can customize the detection patterns here.
+The configuration file is located at `config/wafy.php`. Besides the detection
+patterns, the following options control how bans are applied:
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `ban_threshold` | `1` | Number of detections from one IP (within `strike_window` minutes) before it is banned. **Raising this above 1 is strongly recommended** so a single false positive doesn't lock out a legitimate (shared/NAT/mobile) IP. The offending request is always blocked regardless. |
+| `strike_window` | `60` | Minutes over which strikes accumulate. |
+| `ban_duration` | `1440` | Automatic ban lifetime in minutes (24h). Set to `null` for permanent bans. Manual `wafy:ban` bans are always permanent. |
+| `max_scan_length` | `16384` | Max characters inspected per field — caps regex CPU cost (ReDoS protection). |
+| `fail_open` | `true` | If the ban database is unreachable, let requests through (`true`) instead of returning 503 for everyone (`false`). |
+| `scan_headers` | `['User-Agent', 'Referer']` | Request headers inspected for patterns. |
+| `sensitive_keys` | passwords, tokens, card fields… | Input keys whose values are redacted before a request is stored or notified. |
+| `allowed_ips` | `[]` | IPs / CIDR ranges (IPv4 & IPv6) that bypass Wafy entirely. |
 
 Default protection covers:
 - **SQL Injection (SQLi)**: `UNION SELECT`, common SQL verbs, hex encoding.

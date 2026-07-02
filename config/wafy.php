@@ -3,7 +3,63 @@
 return [
     'action' => env('WAFY_ACTION', 'block'), // 'block' or 'log'
     'enabled' => env('WAFY_ENABLED', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Allowed IPs (whitelist)
+    |--------------------------------------------------------------------------
+    | IP addresses OR CIDR ranges (IPv4 & IPv6) that bypass Wafy entirely.
+    | Examples: '127.0.0.1', '10.0.0.0/8', '2001:db8::/32'.
+    |
+    | IMPORTANT: if your app runs behind a reverse proxy / load balancer / CDN
+    | (Nginx, Cloudflare, etc.), configure Laravel's TrustProxies middleware so
+    | that $request->ip() resolves the REAL client IP. Otherwise Wafy sees the
+    | proxy IP and a single malicious request can ban your own proxy — cutting
+    | off all traffic. Never trust proxies with a blanket '*' unless the app is
+    | only reachable through that proxy.
+    */
     'allowed_ips' => [],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Ban policy
+    |--------------------------------------------------------------------------
+    | ban_threshold : number of malicious detections from a single IP (within
+    |   `strike_window` minutes) required before that IP is banned. The
+    |   offending request is ALWAYS blocked in "block" mode; the threshold only
+    |   governs when a persistent IP ban is created. Raise it above 1 so that a
+    |   single false positive does not permanently lock out a legitimate (and
+    |   possibly shared / NAT / mobile) IP.
+    | ban_duration : lifetime of an automatic ban, in minutes. Use null for a
+    |   permanent ban. Temporary bans limit collateral damage from false
+    |   positives and shared IPs. Manual bans (wafy:ban) stay permanent.
+    */
+    'ban_threshold' => (int) env('WAFY_BAN_THRESHOLD', 1),
+    'strike_window' => (int) env('WAFY_STRIKE_WINDOW', 60), // minutes
+    'ban_duration' => env('WAFY_BAN_DURATION', 1440), // minutes (24h); null = permanent
+
+    /*
+    |--------------------------------------------------------------------------
+    | Hardening
+    |--------------------------------------------------------------------------
+    | max_scan_length : maximum number of characters inspected per field. Caps
+    |   the CPU cost of the regex engine (ReDoS protection) on large bodies.
+    | fail_open : if the ban database is unreachable, let requests through
+    |   (true) instead of returning an error for every request (false).
+    | scan_headers : request headers inspected for malicious patterns.
+    | sensitive_keys : input keys whose values are redacted before a request is
+    |   persisted or sent in a notification (avoids storing passwords/PII).
+    */
+    'max_scan_length' => (int) env('WAFY_MAX_SCAN_LENGTH', 16384),
+    'fail_open' => (bool) env('WAFY_FAIL_OPEN', true),
+    'scan_headers' => ['User-Agent', 'Referer'],
+    'sensitive_keys' => [
+        'password', 'password_confirmation', 'current_password',
+        'token', '_token', 'api_token', 'api_key', 'apikey', 'secret',
+        'authorization', 'access_token', 'refresh_token', 'private_key',
+        'credit_card', 'card_number', 'cvv', 'cvc',
+    ],
+
     'notifications' => [
         'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
         'channels' => ['mail'], // Can be ['mail', 'slack']

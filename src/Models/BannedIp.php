@@ -19,6 +19,22 @@ class BannedIp extends Model
         'banned_until' => 'datetime',
     ];
 
+    /**
+     * Scope a query to a given IP address.
+     */
+    public function scopeForIp($query, string $ip)
+    {
+        return $query->where('ip_address', $ip);
+    }
+
+    /**
+     * Whether this ban is currently in force (permanent, or not yet expired).
+     */
+    public function isActive(): bool
+    {
+        return is_null($this->banned_until) || now()->lessThan($this->banned_until);
+    }
+
     public function routeNotificationForMail($notification)
     {
         return config('wafy.notifications.email');
