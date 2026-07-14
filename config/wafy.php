@@ -79,56 +79,89 @@ return [
         'slack_webhook' => env('WAFY_SLACK_WEBHOOK', ''),
     ],
 
-    'patterns' => [
-        // --- SQL Injection (SQLi) ---
-        '/(union(\s+all)?\s+select)/i', // UNION SELECT
-        '/(?:select\s*\(.*?\)\s*from|union\s*\(.*?\)\s*select)/i', // Obfuscation par parenthèses `(select(id)from...)`
-        // SELECT ... FROM uniquement avec un contexte d'injection réel (union / where /
-        // commentaire / etc.) — évite de bannir la prose « select an item from the menu ».
-        '/\bselect\b[\s\S]{0,150}?\bfrom\b[\s\S]{0,150}?(\bwhere\b|\bgroup\s+by\b|\border\s+by\b|\blimit\b|\bunion\b|\binto\b|\bhaving\b|\bprocedure\b|--|#|;|information_schema)/i',
-        // DML destructif / lecture avec contexte SQL (pas la prose « delete from your cart »).
-        '/\b(delete\s+from|insert\s+into|update\b[\s\S]{0,60}?\bset)\b[\s\S]{0,150}?(\bwhere\b|--|#|;|\bvalues\s*\(|\bselect\b|information_schema)/i',
-        '/(information_schema\.|table_schema)/i', // Schema probing (table_name retiré : trop générique)
-        '/(unhex\s*\(.*?\))/i', // Unhex function (common in SQLi)
-        // Littéral hexadécimal 0x uniquement accolé à un mot-clé SQL — les adresses crypto
-        // (0x71C7…) et les IDs hexa isolés sont légitimes et ne doivent plus bannir.
-        '/\b0x[0-9a-f]{2,}\b[\s\S]{0,40}\b(from|where|union|select|order\s+by|limit)\b|\b(select|union|unhex|concat|values)\b[\s\S]{0,40}\b0x[0-9a-f]{2,}\b/i',
-        // Commentaires SQL contextualisés : plus de faux positif sur les signatures e-mail
-        // « -- » (RFC 3676) ni sur le CSS/JS « /* … */ » collé dans un éditeur riche.
-        '/(\/\*!|[\'"`)\d]--|[\'"`)]\s*#|--\s*$|#\s*sqli)/i',
-        '/(waitfor\s+delay|benchmark\s*\(|sleep\s*\(\s*\d|pg_sleep\s*\()/i', // Time-based blind SQLi
+    /*
+    |--------------------------------------------------------------------------
+    | Moteur de détection : scoring pondéré
+    |--------------------------------------------------------------------------
+    | Chaque règle possède un `id`, un `score` et un `pattern`. Pour chaque
+    | requête, Wafy additionne le score de TOUTES les règles qui matchent (une
+    | règle ne compte qu'une fois, quel que soit le nombre de champs touchés) et
+    | ne bloque/bannit que si le total atteint `score_threshold`.
+    |
+    | L'intérêt : un signal ambigu isolé (score faible) ne bloque plus une
+    | requête légitime — il faut soit un signal fort (score >= seuil), soit
+    | plusieurs signaux corroborants. C'est le remède de fond aux faux positifs.
+    |
+    | Barème indicatif : 5 = attaque non ambiguë (bloque seule) · 4 = signal fort
+    | (bloque seul) · 3 = moyen (a besoin d'un signal de plus) · 2 = faible ·
+    | 1 = simple indice. Ajustez librement, désactivez une règle en la retirant.
+    |
+    | Rétro-compat : si `rules` est vide mais que l'ancienne clé `patterns` (liste
+    | plate de regex) existe, chaque pattern est traité comme une règle au score
+    | du seuil — le comportement historique (blocage au premier match) est
+    | conservé pour les configs déjà publiées.
+    */
+    'score_threshold' => (int) env('WAFY_SCORE_THRESHOLD', 4),
 
-        // --- Local File Inclusion (LFI) & Path Traversal ---
-        '/(\.\.\/|\.\.\\\\|\.\.%2f|\.\.%5c|\.\.%252f)/i', // Traversal including double encoding & windows
-        '/(\/etc\/passwd|C:\\\\Windows\\\\win\.ini|C:\/Windows\/win\.ini|\/boot\.ini)/i', // Common system files
-        '/(\/proc\/self\/environ|\/etc\/shadow|\/var\/log)/i', // Sensitive Linux files
-        '/(php:\/\/filter|php:\/\/input|file:\/\/|phar:\/\/|expect:\/\/|zip:\/\/)/i', // PHP wrappers
-        '/(\.env(?![a-z0-9])|auth\.json|launchSettings\.json)/i', // Sensitive config files (.env ancré : plus de FP sur « 3.Environment »)
+    'rules' => [
+        // === SQL Injection (SQLi) ===
+        ['id' => 'sqli.union_select',    'score' => 5, 'pattern' => '/(union(\s+all)?\s+select)/i'],
+        ['id' => 'sqli.paren_obfusc',    'score' => 5, 'pattern' => '/(?:select\s*\(.*?\)\s*from|union\s*\(.*?\)\s*select)/i'],
+        // SELECT … FROM uniquement avec un contexte d'injection réel (évite la prose « select an item from »).
+        ['id' => 'sqli.select_from',     'score' => 3, 'pattern' => '/\bselect\b[\s\S]{0,150}?\bfrom\b[\s\S]{0,150}?(\bwhere\b|\bgroup\s+by\b|\border\s+by\b|\blimit\b|\bunion\b|\binto\b|\bhaving\b|\bprocedure\b|--|#|;|information_schema)/i'],
+        // DML avec contexte SQL (pas la prose « delete from your cart »).
+        ['id' => 'sqli.dml',             'score' => 3, 'pattern' => '/\b(delete\s+from|insert\s+into|update\b[\s\S]{0,60}?\bset)\b[\s\S]{0,150}?(\bwhere\b|--|#|;|\bvalues\s*\(|\bselect\b|information_schema)/i'],
+        // DDL destructif : DROP/ALTER/TRUNCATE/CREATE/RENAME/GRANT.
+        ['id' => 'sqli.ddl',             'score' => 4, 'pattern' => '/\b(drop|alter|truncate|rename)\s+(table|database|schema|index|view)\b|\bcreate\s+(table|database)\b|\bgrant\s+all\b/i'],
+        // Requêtes empilées : « ; SELECT … », « ; DROP … ».
+        ['id' => 'sqli.stacked',         'score' => 3, 'pattern' => '/;\s*(select|insert|update|delete|drop|create|alter|truncate)\b/i'],
+        // Tautologie (auth-bypass) : « OR 1=1 », « ' OR '1'='1 » — opérandes identiques (backref).
+        ['id' => 'sqli.tautology',       'score' => 4, 'pattern' => '/\b(or|and)\s+([\'"`]?)(\w+)\2\s*(=|<>|!=|<|>|\blike\b)\s*([\'"`]?)\3\b/i'],
+        // Comparaison numérique booléenne « OR 5>1 » (indice faible, sujet aux maths).
+        ['id' => 'sqli.bool_numeric',    'score' => 2, 'pattern' => '/\b(or|and)\s+\d+\s*(=|<>|!=|<|>)\s*\d+(\s|$|--|#|;|\))/i'],
+        ['id' => 'sqli.schema_probe',    'score' => 3, 'pattern' => '/(information_schema\.|\btable_schema\b)/i'],
+        // Littéral 0x uniquement en contexte SQL (adresses crypto / IDs hexa isolés = légitimes).
+        ['id' => 'sqli.hex_ctx',         'score' => 4, 'pattern' => '/\b0x[0-9a-f]{2,}\b[\s\S]{0,40}\b(from|where|union|select|order\s+by|limit)\b|\b(select|union|unhex|concat|values)\b[\s\S]{0,40}\b0x[0-9a-f]{2,}\b/i'],
+        ['id' => 'sqli.unhex_char',      'score' => 3, 'pattern' => '/(unhex\s*\(.*?\)|\bchar\s*\(\s*\d+\s*(,\s*\d+\s*)*\))/i'],
+        // Breakout de quote/parenthèse suivi d'un commentaire (« admin'-- », « 1')# ») : signal fort.
+        ['id' => 'sqli.quote_comment',   'score' => 4, 'pattern' => '/[\'"`)](--|#)/'],
+        // Formes de commentaire ambiguës (score faible) : « /*! » (aussi présent dans le CSS
+        // minifié), plage numérique « 5--10 », « -- » en fin de champ. Ne bloque pas seul.
+        ['id' => 'sqli.comment',         'score' => 2, 'pattern' => '/(\/\*!|\b\d+\s*--|--\s*$|#\s*sqli)/i'],
+        ['id' => 'sqli.time_based',      'score' => 4, 'pattern' => '/(waitfor\s+delay|benchmark\s*\(|sleep\s*\(\s*\d|pg_sleep\s*\(|dbms_pipe\.receive_message)/i'],
+        // Écriture de fichier (webshell) et extraction error-based.
+        ['id' => 'sqli.into_outfile',    'score' => 5, 'pattern' => '/\binto\s+(out|dump)file\b/i'],
+        ['id' => 'sqli.error_based',     'score' => 4, 'pattern' => '/\b(extractvalue|updatexml|load_file)\s*\(/i'],
 
-        // --- Cross-Site Scripting (XSS) ---
-        // Data URI exécutable uniquement — image/*, application/pdf, font/* exclus
-        // (uploads de signature, avatars, images collées légitimes).
-        '/(data:(text\/(html|javascript)|image\/svg\+xml|application\/(xhtml\+xml|xml))\s*;base64,)/i',
-        '/(<script.*?>.*?<\/script>)/is', // Script tags
-        '/(?:%3C|%3e|<|>)script/i', // Variante brute pour pallier certains doubles-encodages
-        '/(javascript:[^\s])/i', // Pseudo-protocole javascript: suivi d'une charge (pas la prose « JavaScript: … »)
-        // Handler d'événement inline DANS une balise : couvre tous les on* (whitespace-tolérant),
-        // sans le faux positif de « onboarding= » hors contexte HTML.
-        '/<[a-z!][^>]{0,200}?[\s\/]on[a-z]{3,}\s*=/i',
-        '/(<iframe.*?>|<iframe>|<object.*?>|<embed.*?>|<base\b)/i', // Dangerous tags
+        // === Local File Inclusion (LFI) & Path Traversal ===
+        ['id' => 'lfi.traversal',        'score' => 5, 'pattern' => '/(\.\.\/|\.\.\\\\|\.\.%2f|\.\.%5c|\.\.%252f)/i'],
+        ['id' => 'lfi.system_files',     'score' => 5, 'pattern' => '/(\/etc\/passwd|C:\\\\Windows\\\\win\.ini|C:\/Windows\/win\.ini|\/boot\.ini)/i'],
+        ['id' => 'lfi.etc_shadow',       'score' => 5, 'pattern' => '/(\/proc\/self\/environ|\/etc\/shadow)/i'],
+        ['id' => 'lfi.var_log',          'score' => 2, 'pattern' => '/\/var\/log\b/i'],
+        ['id' => 'lfi.php_wrappers',     'score' => 4, 'pattern' => '/(php:\/\/filter|php:\/\/input|file:\/\/|phar:\/\/|expect:\/\/|zip:\/\/)/i'],
+        ['id' => 'lfi.config_files',     'score' => 3, 'pattern' => '/(\.env(?![a-z0-9])|auth\.json|launchSettings\.json)/i'],
 
-        // --- Remote Code Execution (RCE) / Command Injection ---
-        '/(base64_decode|eval\(|system\(|exec\(|shell_exec\(|passthru\()/i', // PHP execution functions
-        // Séparateur shell (hors « & » seul, trop courant en prose) + binaire, sans exiger
-        // d'espace final : couvre « ;id », « |whoami », « ;bash -i »…
-        '/([;|]|\|\||&&)\s*(ls|cat|pwd|whoami|id|uname|wget|curl|netcat|nc|bash|sh|zsh|python[23]?|perl|ruby|ping|nslookup|dig|rm|chmod|chown|xxd|nohup|nmap)\b/i',
-        // Substitution de commande $(commande) — exclut jQuery $(document) et la prose.
-        '/\$\(\s*(ls|cat|id|whoami|uname|curl|wget|nc|bash|sh|python|perl|echo|env|base64|printf|head|tail|awk|sed)\b/i',
-        '/(%\{lua:os\.execute\(.*?\)\})/i', // Lua RCE seen in logs
+        // === Cross-Site Scripting (XSS) ===
+        // Data URI exécutable uniquement (image/*, application/pdf exclus : uploads légitimes).
+        ['id' => 'xss.data_uri',         'score' => 4, 'pattern' => '/(data:(text\/(html|javascript)|image\/svg\+xml|application\/(xhtml\+xml|xml))\s*;base64,)/i'],
+        ['id' => 'xss.script_tag',       'score' => 5, 'pattern' => '/(<script.*?>.*?<\/script>)/is'],
+        ['id' => 'xss.script_brute',     'score' => 3, 'pattern' => '/(?:%3C|%3e|<|>)script/i'],
+        ['id' => 'xss.js_protocol',      'score' => 3, 'pattern' => '/(javascript:[^\s])/i'],
+        // Handler d'événement inline dans une balise (tous les on*, tolérant à l'espace).
+        ['id' => 'xss.event_handler',    'score' => 4, 'pattern' => '/<[a-z!][^>]{0,200}?[\s\/]on[a-z]{3,}\s*=/i'],
+        ['id' => 'xss.dangerous_tags',   'score' => 4, 'pattern' => '/(<iframe.*?>|<iframe>|<object.*?>|<embed.*?>|<base\b)/i'],
 
-        // --- Common Scanner & Exploit Signatures ---
-        '/(\/manager\/html|\/wp-admin|\/wp-content\/plugins|\/cgi-bin)/i', // Sensitive areas
-        '/(\/XMLPService|\/RPC2|\/igd\/v1\/get-users-data|\/convertCSVtoParquet\.php)/i', // Specific exploit paths
-        '/(checkwaf=)/i', // Detect explicit WAF testing if desired
+        // === Remote Code Execution (RCE) / Command Injection ===
+        ['id' => 'rce.php_functions',    'score' => 5, 'pattern' => '/(base64_decode|eval\(|system\(|exec\(|shell_exec\(|passthru\()/i'],
+        // Séparateur shell (hors « & » seul, trop courant) + binaire, sans espace final requis.
+        ['id' => 'rce.command_inject',   'score' => 4, 'pattern' => '/([;|]|\|\||&&)\s*(ls|cat|pwd|whoami|id|uname|wget|curl|netcat|nc|bash|sh|zsh|python[23]?|perl|ruby|ping|nslookup|dig|rm|chmod|chown|xxd|nohup|nmap)\b/i'],
+        // Substitution de commande $(commande) — exclut jQuery $(document).
+        ['id' => 'rce.command_subst',    'score' => 4, 'pattern' => '/\$\(\s*(ls|cat|id|whoami|uname|curl|wget|nc|bash|sh|python|perl|echo|env|base64|printf|head|tail|awk|sed)\b/i'],
+        ['id' => 'rce.lua',              'score' => 5, 'pattern' => '/(%\{lua:os\.execute\(.*?\)\})/i'],
+
+        // === Scanner & Exploit Signatures ===
+        ['id' => 'scanner.sensitive',    'score' => 2, 'pattern' => '/(\/manager\/html|\/wp-admin|\/wp-content\/plugins|\/cgi-bin)/i'],
+        ['id' => 'scanner.exploit_path', 'score' => 3, 'pattern' => '/(\/XMLPService|\/RPC2|\/igd\/v1\/get-users-data|\/convertCSVtoParquet\.php)/i'],
+        ['id' => 'scanner.checkwaf',     'score' => 2, 'pattern' => '/(checkwaf=)/i'],
     ],
 ];

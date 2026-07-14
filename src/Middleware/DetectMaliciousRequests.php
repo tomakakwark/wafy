@@ -51,51 +51,134 @@ class DetectMaliciousRequests
             }
         }
 
-        // Détection des patterns malveillants
-        $patterns = config('wafy.patterns', []);
-        $subjects = $this->buildSubjects($request);
+        // Weighted scoring: accumulate the score of every rule that matches
+        // this request and only act once the total reaches score_threshold.
+        // A lone ambiguous signal no longer blocks legitimate traffic; a strong
+        // rule (score >= threshold) or several corroborating rules do.
+        $threshold = $this->scoreThreshold();
+        $result = $this->evaluate($this->buildSubjects($request));
+
+        if ($result['score'] < $threshold) {
+            return $next($request);
+        }
+
+        $summary = sprintf(
+            'WAF score %d/%d in %s (rules: %s)',
+            $result['score'],
+            $threshold,
+            implode(',', $result['fields']),
+            implode(', ', $result['rules'])
+        );
+
+        Log::warning("Wafy: {$summary} from {$clientIp}");
+
+        // In Log-Only mode we record the hit but never block or ban.
+        if ($action === 'log') {
+            Log::info("Wafy (Log-Only): request allowed for {$clientIp} despite: {$summary}");
+            return $next($request);
+        }
+
+        // Never persist a ban for a private/reserved IP unless explicitly
+        // allowed: such an address almost always means TrustProxies is
+        // misconfigured and we would ban our own proxy/CDN, taking down all
+        // traffic. The offending request is still blocked.
+        if ($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false)) {
+            Log::warning("Wafy: {$summary} from private/reserved IP {$clientIp} — ban skipped (check TrustProxies).");
+
+            return response()->json(['message' => 'Requête bloquée.'], 403);
+        }
+
+        // Only escalate to a persistent IP ban once the strike threshold is
+        // reached. The offending request is blocked either way.
+        if ($this->registerStrike($clientIp)) {
+            $this->banIp($request, $clientIp, $summary);
+
+            return response()->json(['message' => 'Votre IP est bannie.'], 403);
+        }
+
+        return response()->json(['message' => 'Requête bloquée.'], 403);
+    }
+
+    /**
+     * Configured blocking threshold (minimum accumulated score to act on).
+     */
+    private function scoreThreshold(): int
+    {
+        return max(1, (int) config('wafy.score_threshold', 4));
+    }
+
+    /**
+     * Normalise the configured detection rules into a uniform list of
+     * ['id', 'score', 'pattern'] entries.
+     *
+     * Backward compatibility: if `wafy.rules` is empty, fall back to the legacy
+     * flat `wafy.patterns` list, scoring every pattern at the threshold so a
+     * single match still blocks — preserving the pre-scoring behaviour for
+     * configs published before this version.
+     */
+    private function loadRules(): array
+    {
+        $normalized = [];
+
+        foreach ((array) config('wafy.rules', []) as $i => $rule) {
+            if (is_string($rule)) {
+                $normalized[] = ['id' => 'rule_' . $i, 'score' => $this->scoreThreshold(), 'pattern' => $rule];
+            } elseif (is_array($rule) && !empty($rule['pattern'])) {
+                $normalized[] = [
+                    'id' => (string) ($rule['id'] ?? 'rule_' . $i),
+                    'score' => (int) ($rule['score'] ?? $this->scoreThreshold()),
+                    'pattern' => $rule['pattern'],
+                ];
+            }
+        }
+
+        if (!empty($normalized)) {
+            return $normalized;
+        }
+
+        foreach ((array) config('wafy.patterns', []) as $i => $pattern) {
+            $normalized[] = ['id' => 'legacy_' . $i, 'score' => $this->scoreThreshold(), 'pattern' => $pattern];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Run every rule against every subject and accumulate a score.
+     *
+     * Each rule counts at most once regardless of how many subjects it matches
+     * (so the same payload appearing in both RequestBody and RawBody is not
+     * double-counted). Returns the total score, the matched rule ids and the
+     * fields in which matches were found.
+     */
+    private function evaluate(array $subjects): array
+    {
+        $rules = $this->loadRules();
+        $score = 0;
+        $matchedRules = [];
+        $matchedFields = [];
 
         foreach ($subjects as $fieldName => $value) {
             $decodedValue = $this->recursiveUrldecode($value);
 
-            foreach ($patterns as $pattern) {
-                if (preg_match($pattern, $decodedValue)) {
-                    Log::warning("Wafy: Malicious pattern detected from {$clientIp} in {$fieldName}. Pattern: {$pattern}");
+            foreach ($rules as $rule) {
+                if (isset($matchedRules[$rule['id']])) {
+                    continue; // already counted this rule
+                }
 
-                    // If in Log-Only mode, ensure we log but DO NOT BLOCK
-                    if ($action === 'log') {
-                        Log::info("Wafy (Log-Only): Request allowed for {$clientIp}");
-                        continue 2; // Move to next field
-                    }
-
-                    $reason = "Malicious pattern detected in {$fieldName}: {$pattern}";
-
-                    // Never persist a ban for a private/reserved IP unless
-                    // explicitly allowed: such an address almost always means
-                    // TrustProxies is misconfigured and we would ban our own
-                    // proxy/CDN, taking down all traffic. The offending request
-                    // is still blocked.
-                    if ($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false)) {
-                        Log::warning("Wafy: pattern detected from private/reserved IP {$clientIp} — ban skipped (check TrustProxies). {$reason}");
-
-                        return response()->json(['message' => 'Requête bloquée.'], 403);
-                    }
-
-                    // Only escalate to a persistent IP ban once the strike
-                    // threshold is reached. The offending request is blocked
-                    // either way.
-                    if ($this->registerStrike($clientIp)) {
-                        $this->banIp($request, $clientIp, $reason);
-
-                        return response()->json(['message' => 'Votre IP est bannie.'], 403);
-                    }
-
-                    return response()->json(['message' => 'Requête bloquée.'], 403);
+                if (@preg_match($rule['pattern'], $decodedValue) === 1) {
+                    $matchedRules[$rule['id']] = true;
+                    $matchedFields[$fieldName] = true;
+                    $score += $rule['score'];
                 }
             }
         }
 
-        return $next($request);
+        return [
+            'score' => $score,
+            'rules' => array_keys($matchedRules),
+            'fields' => array_keys($matchedFields),
+        ];
     }
 
     /**
