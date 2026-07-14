@@ -39,6 +39,16 @@ return [
     'ban_duration' => env('WAFY_BAN_DURATION', 1440), // minutes (24h); null = permanent
 
     /*
+    | ipv6_ban_prefix : longueur de préfixe utilisée pour bannir/compter les
+    |   strikes d'une adresse IPv6. Par défaut 64 : les bans portent sur le
+    |   réseau /64 (ce qu'un FAI/hébergeur alloue en général à UN client), ce qui
+    |   empêche l'attaquant de contourner un ban en changeant d'adresse parmi les
+    |   milliards de son allocation. Mettez 128 pour bannir l'adresse exacte.
+    |   Sans effet sur l'IPv4 (toujours bannie par adresse exacte).
+    */
+    'ipv6_ban_prefix' => (int) env('WAFY_IPV6_BAN_PREFIX', 64),
+
+    /*
     |--------------------------------------------------------------------------
     | Hardening
     |--------------------------------------------------------------------------
@@ -52,6 +62,17 @@ return [
     */
     'max_scan_length' => (int) env('WAFY_MAX_SCAN_LENGTH', 16384),
     'fail_open' => (bool) env('WAFY_FAIL_OPEN', true),
+
+    /*
+    | ban_lookup_cache_ttl : durée (en secondes) de mise en cache du résultat
+    |   « cette IP n'a PAS de ban » afin d'éviter une requête SQL par middleware
+    |   et par requête HTTP pour le trafic légitime (99 % des cas). 0 = désactivé
+    |   (comportement historique). Seuls les résultats « propre » sont cachés ;
+    |   les bans sont invalidés à leur création. Une petite valeur (10-30 s) est
+    |   un bon compromis ; nécessite un cache partagé (redis/database/file) pour
+    |   être efficace en multi-serveur.
+    */
+    'ban_lookup_cache_ttl' => (int) env('WAFY_BAN_LOOKUP_CACHE_TTL', 0),
 
     /*
     | ban_private_ips : par défaut Wafy REFUSE de bannir une IP privée / réservée

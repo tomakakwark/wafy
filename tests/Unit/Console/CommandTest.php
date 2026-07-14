@@ -57,4 +57,32 @@ class CommandTest extends TestCase
             ->expectsOutput('2.2.2.2')
             ->assertExitCode(0);
     }
+
+    /** @test */
+    public function it_rejects_an_invalid_ip_on_ban()
+    {
+        $this->artisan('wafy:ban', ['ip' => 'not-an-ip'])
+            ->expectsOutputToContain('Adresse IP invalide')
+            ->assertExitCode(1);
+
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => 'not-an-ip']);
+    }
+
+    /** @test */
+    public function it_rejects_an_invalid_ip_on_unban()
+    {
+        $this->artisan('wafy:unban', ['ip' => '999.999.999.999'])
+            ->expectsOutputToContain('Adresse IP invalide')
+            ->assertExitCode(1);
+    }
+
+    /** @test */
+    public function it_bans_an_ipv6_address_by_its_prefix()
+    {
+        $this->artisan('wafy:ban', ['ip' => '2001:db8:1:2::5'])
+            ->assertExitCode(0);
+
+        // Manual bans normalise to the same /64 identity the middleware uses.
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '2001:db8:1:2::/64']);
+    }
 }

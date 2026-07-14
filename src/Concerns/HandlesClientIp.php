@@ -3,9 +3,67 @@
 namespace Bdsa\Wafy\Concerns;
 
 use Symfony\Component\HttpFoundation\IpUtils;
+use Bdsa\Wafy\Support\BanKey;
 
 trait HandlesClientIp
 {
+    /**
+     * Canonical identity used to store / look up bans and strikes for an IP
+     * (IPv4 unchanged; IPv6 collapsed to its configured network prefix).
+     */
+    protected function banIdentity(?string $ip): string
+    {
+        return BanKey::for($ip);
+    }
+
+    /**
+     * Whether the default cache store is ephemeral (array/null) and therefore
+     * cannot persist strikes or runtime toggles across requests.
+     */
+    protected function cacheIsEphemeral(): bool
+    {
+        return in_array(config('cache.default'), ['array', 'null'], true);
+    }
+
+    /**
+     * Configured TTL (seconds) for caching negative ban lookups. 0 = disabled.
+     */
+    protected function banLookupTtl(): int
+    {
+        return max(0, (int) config('wafy.ban_lookup_cache_ttl', 0));
+    }
+
+    /**
+     * Whether this identity is known (cached) to have no ban, letting both
+     * middlewares skip the database lookup for legitimate repeat traffic.
+     */
+    protected function isKnownClean(string $identity): bool
+    {
+        return $this->banLookupTtl() > 0
+            && (bool) cache()->get('wafy:clean:' . $identity, false);
+    }
+
+    /**
+     * Remember that this identity currently has no ban (short TTL).
+     */
+    protected function rememberClean(string $identity): void
+    {
+        $ttl = $this->banLookupTtl();
+
+        if ($ttl > 0) {
+            cache()->put('wafy:clean:' . $identity, true, $ttl);
+        }
+    }
+
+    /**
+     * Invalidate the "clean" marker for an identity (called when a ban is
+     * created so the next request re-checks the database).
+     */
+    protected function forgetClean(string $identity): void
+    {
+        cache()->forget('wafy:clean:' . $identity);
+    }
+
     /**
      * Determine whether the given client IP is whitelisted.
      *

@@ -35,4 +35,15 @@ class SetActionTest extends TestCase
             ->expectsOutput('Invalid action. Please use "block" or "log".')
             ->assertExitCode(1);
     }
+
+    /** @test */
+    public function it_warns_when_the_cache_driver_is_ephemeral()
+    {
+        // Testbench defaults to the array cache -> the setting won't persist.
+        config(['cache.default' => 'array']);
+
+        $this->artisan('wafy:action', ['action' => 'block'])
+            ->expectsOutputToContain('ne persistera pas')
+            ->assertExitCode(0);
+    }
 }
