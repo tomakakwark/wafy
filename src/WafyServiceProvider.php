@@ -36,6 +36,7 @@ class WafyServiceProvider extends ServiceProvider
                 \Bdsa\Wafy\Console\ListBannedIps::class ,
                 \Bdsa\Wafy\Console\ToggleWafy::class ,
                 \Bdsa\Wafy\Console\SetAction::class ,
+                \Bdsa\Wafy\Console\TestNotification::class ,
             ]);
         }
     }

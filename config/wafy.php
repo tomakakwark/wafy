@@ -74,9 +74,11 @@ return [
 
     'notifications' => [
         'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
-        'channels' => ['mail'], // Can be ['mail', 'slack']
+        'channels' => ['mail'], // any of: 'mail', 'slack', 'discord', 'teams'
         'email' => env('WAFY_NOTIFICATION_EMAIL', 'admin@example.com'),
         'slack_webhook' => env('WAFY_SLACK_WEBHOOK', ''),
+        'discord_webhook' => env('WAFY_DISCORD_WEBHOOK', ''),
+        'teams_webhook' => env('WAFY_TEAMS_WEBHOOK', ''),
     ],
 
     /*

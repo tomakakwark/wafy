@@ -97,6 +97,13 @@ Manage banned IPs directly from the terminal:
   php artisan wafy:action {block|log}
   ```
 
+- **Send a test notification** (verify your mail/Slack/Discord/Teams wiring):
+  ```bash
+  php artisan wafy:test-notification            # all configured channels
+  php artisan wafy:test-notification --channel=discord
+  ```
+  Reports success/failure per channel and skips channels with no destination configured.
+
 > **ℹ️ Note — `wafy:mode` and `wafy:action` are temporary runtime overrides.**
 > These two commands store their state in the **cache**, so they are meant for
 > momentary situations (testing, incident response). Any cache flush
@@ -201,12 +208,30 @@ return [
     ],
     'notifications' => [
         'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
-        'channels' => ['mail'], // Choose 'mail', 'slack' or both
+        'channels' => ['mail'], // any of: 'mail', 'slack', 'discord', 'teams'
         'email' => env('WAFY_NOTIFICATION_EMAIL', 'admin@example.com'),
         'slack_webhook' => env('WAFY_SLACK_WEBHOOK', ''),
+        'discord_webhook' => env('WAFY_DISCORD_WEBHOOK', ''),
+        'teams_webhook' => env('WAFY_TEAMS_WEBHOOK', ''),
     ],
 ];
 ```
+
+### Notification channels
+
+Wafy ships four channels, selected via `notifications.channels`:
+
+| Channel | Destination config | Notes |
+| --- | --- | --- |
+| `mail` | `notifications.email` | Uses your app's mailer. |
+| `slack` | `notifications.slack_webhook` | Requires `laravel/slack-notification-channel`. |
+| `discord` | `notifications.discord_webhook` | Discord **Incoming Webhook** URL; posts a rich embed. No extra package. |
+| `teams` | `notifications.teams_webhook` | Microsoft Teams **Incoming Webhook** URL; posts a MessageCard. No extra package. |
+
+Discord and Teams POST directly to their webhook via Laravel's HTTP client, so no
+third-party notification package is needed. Notifications are queued
+(`ShouldQueue`) — a slow webhook never blocks the request. Verify your setup with
+`php artisan wafy:test-notification`.
 
 ---
 
