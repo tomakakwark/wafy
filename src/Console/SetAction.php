@@ -22,6 +22,10 @@ class SetAction extends Command
         // Cache for 1 year (essentially permanent until cleared or changed)
         Cache::put('wafy.action', $action, now()->addYear());
 
+        if (in_array(config('cache.default'), ['array', 'null'], true)) {
+            $this->warn('⚠  Cache par défaut « ' . config('cache.default') . ' » : ce réglage ne persistera pas d\'une requête à l\'autre. Configurez un cache partagé (redis/database/file) ou éditez config/wafy.php.');
+        }
+
         $this->info("Wafy action mode set to: {$action}");
         $this->info("In 'log' mode, malicious requests are logged but NOT blocked.");
         return 0;

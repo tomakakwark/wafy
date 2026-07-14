@@ -28,8 +28,15 @@ class BlockBannedIp
             return $next($request);
         }
 
+        $identity = $this->banIdentity($clientIp);
+
+        // A cached "clean" marker lets legitimate repeat traffic skip the DB.
+        if ($this->isKnownClean($identity)) {
+            return $next($request);
+        }
+
         try {
-            $bannedIp = BannedIp::forIp($clientIp)->first();
+            $bannedIp = BannedIp::forIp($identity)->first();
         } catch (\Throwable $e) {
             Log::error("Wafy: ban lookup failed for {$clientIp}: " . $e->getMessage());
             if (!config('wafy.fail_open', true)) {
@@ -52,6 +59,9 @@ class BlockBannedIp
             // Si on arrive ici, c'est que le ban temporaire est expiré, on le nettoie
             $bannedIp->delete();
         }
+
+        // No active ban -> remember the identity as clean for a short while.
+        $this->rememberClean($identity);
 
         return $next($request);
     }

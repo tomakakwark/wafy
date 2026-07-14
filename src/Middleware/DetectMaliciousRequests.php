@@ -29,18 +29,25 @@ class DetectMaliciousRequests
             return $next($request);
         }
 
+        // Canonical ban identity (IPv4 as-is; IPv6 collapsed to its /prefix).
+        $identity = $this->banIdentity($clientIp);
+
         // Check action mode (block vs log)
         $action = cache('wafy.action', config('wafy.action', 'block'));
 
         // Fast early exit: if the IP is already under an ACTIVE ban, skip the
-        // (relatively expensive) pattern matching. Expired bans are ignored
-        // here and cleaned up by BlockBannedIp. Never fail the whole app just
-        // because the ban store is momentarily unavailable.
-        if ($action !== 'log') {
+        // (relatively expensive) pattern matching. A cached "clean" marker lets
+        // legitimate repeat traffic skip the DB lookup entirely. Expired bans
+        // are ignored here and cleaned up by BlockBannedIp. Never fail the whole
+        // app just because the ban store is momentarily unavailable.
+        if ($action !== 'log' && !$this->isKnownClean($identity)) {
             try {
-                $existing = BannedIp::forIp($clientIp)->first();
+                $existing = BannedIp::forIp($identity)->first();
                 if ($existing && $existing->isActive()) {
                     return response()->json(['message' => 'Votre IP est bannie.'], 403);
+                }
+                if (!$existing) {
+                    $this->rememberClean($identity);
                 }
             } catch (\Throwable $e) {
                 Log::error("Wafy: ban lookup failed for {$clientIp}: " . $e->getMessage());
@@ -90,7 +97,7 @@ class DetectMaliciousRequests
             // misconfigured and we would ban our own proxy/CDN. Still blocked.
             if ($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false)) {
                 Log::warning("Wafy: {$summary} from private/reserved IP {$clientIp} — ban skipped (check TrustProxies).");
-            } elseif ($this->registerStrike($clientIp)) {
+            } elseif ($this->registerStrike($identity)) {
                 // Strike threshold reached -> persistent ban.
                 $this->banIp($request, $clientIp, $summary);
 
@@ -224,7 +231,10 @@ class DetectMaliciousRequests
 
         foreach ($subjects as $name => $value) {
             if (strlen($value) > $maxLen) {
-                $subjects[$name] = substr($value, 0, $maxLen);
+                // Scan the HEAD and the TAIL so a payload padded past the cut is
+                // still inspected (defeats junk-prefix truncation bypass). A
+                // newline join prevents a match spanning the two slices.
+                $subjects[$name] = substr($value, 0, $maxLen) . "\n" . substr($value, -$maxLen);
             }
         }
 
@@ -235,7 +245,7 @@ class DetectMaliciousRequests
      * Register a strike for the IP and report whether the ban threshold has
      * been reached. A threshold of 1 (default) bans on the first detection.
      */
-    private function registerStrike(string $ip): bool
+    private function registerStrike(string $identity): bool
     {
         $threshold = max(1, (int) config('wafy.ban_threshold', 1));
 
@@ -243,16 +253,24 @@ class DetectMaliciousRequests
             return true;
         }
 
-        $key = 'wafy:strikes:' . $ip;
-        $window = max(1, (int) config('wafy.strike_window', 60));
-        $strikes = (int) cache()->get($key, 0) + 1;
-
-        if ($strikes >= $threshold) {
-            cache()->forget($key);
-            return true;
+        if ($this->cacheIsEphemeral()) {
+            Log::warning('Wafy: cache driver "' . config('cache.default') . '" is ephemeral — strike counting (ban_threshold > 1) will not persist across requests. Use a shared cache (redis/database/file).');
         }
 
-        cache()->put($key, $strikes, now()->addMinutes($window));
+        $key = 'wafy:strikes:' . $identity;
+        $window = max(1, (int) config('wafy.strike_window', 60));
+
+        // Atomic increment (avoids the lost-update race of get()+put() under a
+        // concurrent flood). add() seeds the key with its window TTL only if it
+        // does not already exist.
+        $store = cache();
+        $store->add($key, 0, now()->addMinutes($window));
+        $strikes = (int) $store->increment($key);
+
+        if ($strikes >= $threshold) {
+            $store->forget($key);
+            return true;
+        }
 
         return false;
     }
@@ -264,10 +282,11 @@ class DetectMaliciousRequests
     {
         $duration = config('wafy.ban_duration', 1440);
         $bannedUntil = is_null($duration) ? null : now()->addMinutes((int) $duration);
+        $identity = $this->banIdentity($ip);
 
         try {
             $bannedIpModel = BannedIp::updateOrCreate(
-                ['ip_address' => $ip],
+                ['ip_address' => $identity],
                 [
                     'banned_until' => $bannedUntil,
                     'reason' => $reason,
@@ -279,9 +298,12 @@ class DetectMaliciousRequests
                 ]
             );
         } catch (\Throwable $e) {
-            Log::error("Wafy: failed to persist ban for {$ip}: " . $e->getMessage());
+            Log::error("Wafy: failed to persist ban for {$identity}: " . $e->getMessage());
             return;
         }
+
+        // The identity now has an active ban -> drop any cached "clean" marker.
+        $this->forgetClean($identity);
 
         if (config('wafy.notifications.enabled')) {
             try {
