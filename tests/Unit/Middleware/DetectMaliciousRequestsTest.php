@@ -31,10 +31,11 @@ class DetectMaliciousRequestsTest extends TestCase
         $response = $this->get('/test-waf?q=UNION SELECT 1,2,3');
         $response->assertStatus(403);
 
-        $this->assertDatabaseHas('wafy_banned_ips', [
-            'ip_address' => '127.0.0.1',
-            'reason' => 'Malicious pattern detected in QueryString: /(union(\s+all)?\s+select)/i'
-        ]);
+        $ban = BannedIp::firstWhere('ip_address', '127.0.0.1');
+        $this->assertNotNull($ban);
+        // La raison référence l'id de règle (stable) et le score, pas le regex brut.
+        $this->assertStringContainsString('sqli.union_select', $ban->reason);
+        $this->assertStringContainsString('QueryString', $ban->reason);
     }
 
     /** @test */
@@ -43,10 +44,9 @@ class DetectMaliciousRequestsTest extends TestCase
         $response = $this->postJson('/test-waf', ['comment' => '<script>alert(1)</script>']);
         $response->assertStatus(403);
 
-        $this->assertDatabaseHas('wafy_banned_ips', [
-            'ip_address' => '127.0.0.1',
-            'reason' => 'Malicious pattern detected in RequestBody: /(<script.*?>.*?<\/script>)/is'
-        ]);
+        $ban = BannedIp::firstWhere('ip_address', '127.0.0.1');
+        $this->assertNotNull($ban);
+        $this->assertStringContainsString('xss.script_tag', $ban->reason);
     }
 
     /** @test */
@@ -176,6 +176,72 @@ class DetectMaliciousRequestsTest extends TestCase
 
         // La requête est bloquée mais l'IP (proxy présumé) n'est PAS bannie (anti self-DoS).
         $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
+    }
+
+    /**
+     * Nouvelle couverture SQLi (PR scoring) : ces charges passaient toutes
+     * inaperçues avec l'ancien jeu de règles.
+     *
+     * @test
+     * @dataProvider newlyCoveredSqli
+     */
+    public function it_now_detects_previously_missed_sqli(array $get)
+    {
+        $this->get('/test-waf?' . http_build_query($get))->assertStatus(403);
+    }
+
+    public static function newlyCoveredSqli(): array
+    {
+        return [
+            'auth bypass quoted'  => [['u' => "admin' OR '1'='1"]],
+            'auth bypass comment' => [['u' => "admin'--"]],
+            'tautology numeric'   => [['id' => '1 OR 1=1']],
+            'DDL drop table'      => [['q' => 'x; DROP TABLE users']],
+            'stacked + comment'   => [['id' => "1'; DELETE FROM logs WHERE 1=1 --"]],
+            'into outfile'        => [['q' => "1 UNION SELECT 0x1 INTO OUTFILE '/tmp/x'"]],
+            'error based'         => [['id' => 'extractvalue(1,concat(0x7e,version()))']],
+        ];
+    }
+
+    /** @test */
+    public function it_blocks_when_a_single_strong_rule_meets_the_threshold()
+    {
+        // sqli.union_select vaut 5 (>= seuil 4) → bloque seul.
+        $this->get('/test-waf?q=UNION SELECT 1')->assertStatus(403);
+    }
+
+    /** @test */
+    public function it_lets_a_single_ambiguous_signal_through_below_threshold()
+    {
+        // sqli.select_from (score 3) < seuil 4 : requête ambiguë isolée non bloquée.
+        $this->get('/test-waf?q=' . urlencode('select name from users where id=5'))
+            ->assertStatus(200)
+            ->assertSee('Safe');
+
+        // scanner.sensitive (score 2) seul non plus.
+        $this->get('/test-waf?path=' . urlencode('/wp-admin'))
+            ->assertStatus(200);
+
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
+    }
+
+    /** @test */
+    public function it_blocks_when_two_weak_signals_accumulate_past_the_threshold()
+    {
+        // scanner.sensitive (2) + lfi.var_log (2) = 4 >= seuil 4.
+        $this->get('/test-waf?a=' . urlencode('/wp-admin') . '&b=' . urlencode('/var/log/syslog'))
+            ->assertStatus(403);
+    }
+
+    /** @test */
+    public function the_ban_reason_contains_the_accumulated_score_and_rule_ids()
+    {
+        $this->get('/test-waf?q=UNION SELECT 1')->assertStatus(403);
+
+        $ban = BannedIp::firstWhere('ip_address', '127.0.0.1');
+        $this->assertNotNull($ban);
+        $this->assertStringContainsString('WAF score', $ban->reason);
+        $this->assertStringContainsString('sqli.union_select', $ban->reason);
     }
 
     /** @test */

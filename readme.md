@@ -134,6 +134,7 @@ patterns, the following options control how bans are applied:
 | `ban_threshold` | `3` | Number of detections from one IP (within `strike_window` minutes) before it is banned. Kept above 1 so a single false positive doesn't lock out a legitimate (shared/NAT/mobile) IP. The offending request is always blocked regardless. |
 | `strike_window` | `60` | Minutes over which strikes accumulate. |
 | `ban_duration` | `1440` | Automatic ban lifetime in minutes (24h). Set to `null` for permanent bans. Manual `wafy:ban` bans are always permanent. |
+| `score_threshold` | `4` | Minimum **accumulated rule score** before a request is blocked/banned (see *Detection scoring* below). |
 | `ban_private_ips` | `false` | When `false` (default), Wafy **refuses to ban private/reserved/loopback IPs** — a strong sign that TrustProxies is misconfigured and `$request->ip()` is the proxy, so banning it would take down all traffic. Set to `true` only if your clients legitimately have private IPs (internal network, no proxy). |
 | `max_scan_length` | `16384` | Max characters inspected per field — caps regex CPU cost (ReDoS protection). |
 | `fail_open` | `true` | If the ban database is unreachable, let requests through (`true`) instead of returning 503 for everyone (`false`). |
@@ -142,21 +143,45 @@ patterns, the following options control how bans are applied:
 | `allowed_ips` | `[]` | IPs / CIDR ranges (IPv4 & IPv6) that bypass Wafy entirely. |
 
 Default protection covers:
-- **SQL Injection (SQLi)**: `UNION SELECT`, common SQL verbs, hex encoding.
-- **Local File Inclusion (LFI)**: Directory traversal (`../`), system files (`/etc/passwd`).
-- **Cross-Site Scripting (XSS)**: Script tags, event handlers (`onload`, `onerror`).
-- **Remote Code Execution (RCE)**: Shell commands (`cat`, `wget`), PHP execution functions.
+- **SQL Injection (SQLi)**: `UNION SELECT`, contextual `SELECT … FROM`/DML, **boolean tautologies / auth bypass** (`' OR '1'='1`, `admin'--`), **DDL** (`DROP/ALTER/TRUNCATE TABLE`), **stacked queries**, `INTO OUTFILE`, error-based (`extractvalue`/`updatexml`), time-based (`sleep`/`benchmark`), hex literals *in SQL context*.
+- **Local File Inclusion (LFI)**: Directory traversal (`../`), system files (`/etc/passwd`, `/etc/shadow`), PHP wrappers (`php://`, `phar://`).
+- **Cross-Site Scripting (XSS)**: Script tags, **all inline `on*` event handlers** (whitespace-tolerant), dangerous tags, `javascript:`, executable data URIs.
+- **Remote Code Execution (RCE)**: Shell commands & separators (`;id`, `|whoami`), command substitution (`$(...)`), PHP execution functions.
+
+### Detection scoring
+
+Instead of banning on the **first** matching pattern, Wafy assigns each rule a
+**score** and only acts once the **accumulated** score of all rules that match a
+request reaches `score_threshold` (default `4`). Each rule counts once, no matter
+how many fields it matches. This is the core defence against false positives: a
+lone ambiguous signal (e.g. the word `select … from` in a support message) never
+blocks legitimate traffic, while a strong rule (score ≥ threshold) or several
+corroborating weak signals do.
+
+Indicative scale: `5` = unambiguous attack (blocks alone) · `4` = strong · `3` =
+medium (needs one more signal) · `2` = weak · `1` = hint.
+
+Rules live in the `rules` array, each `['id' => …, 'score' => …, 'pattern' => …]`.
+Disable a rule by removing it, tune sensitivity via its `score` or the global
+`score_threshold`. Ban reasons/logs reference the stable rule **id** and the
+total score (e.g. `WAF score 8/4 in RequestBody (rules: xss.script_tag, …)`).
+
+> **Backward compatibility:** a config still using the old flat `patterns` array
+> (list of regex strings) keeps working — each pattern is scored at the threshold,
+> preserving the pre-scoring "block on first match" behaviour until you migrate to
+> `rules`.
 
 Example `config/wafy.php`:
 
 ```php
 return [
     'enabled' => env('WAFY_ENABLED', true),
-    'patterns' => [
-        '/(union(\s+all)?\s+select)/i',
-        '/(select\s+.*\s+from|delete\s+from|update\s+.*\s+set)/i',
-        '/(<script.*?>.*?<\/script>)/is',
-        // Add your custom patterns here
+    'score_threshold' => env('WAFY_SCORE_THRESHOLD', 4),
+    'rules' => [
+        ['id' => 'sqli.union_select', 'score' => 5, 'pattern' => '/(union(\s+all)?\s+select)/i'],
+        ['id' => 'sqli.tautology',    'score' => 4, 'pattern' => '/\b(or|and)\s+([\'"`]?)(\w+)\2\s*(=|<>|!=|<|>|\blike\b)\s*([\'"`]?)\3\b/i'],
+        ['id' => 'xss.script_tag',    'score' => 5, 'pattern' => '/(<script.*?>.*?<\/script>)/is'],
+        // Add your own rules here…
     ],
     'allowed_ips' => [
         '127.0.0.1', // Localhost
