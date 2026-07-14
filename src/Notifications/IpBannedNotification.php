@@ -3,12 +3,13 @@
 namespace Bdsa\Wafy\Notifications;
 
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Messages\SlackMessage;
 use Bdsa\Wafy\Models\BannedIp;
 
-class IpBannedNotification extends Notification
+class IpBannedNotification extends Notification implements ShouldQueue
 {
     use Queueable;
 
