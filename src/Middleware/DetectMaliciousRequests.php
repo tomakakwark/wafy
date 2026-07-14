@@ -70,6 +70,17 @@ class DetectMaliciousRequests
 
                     $reason = "Malicious pattern detected in {$fieldName}: {$pattern}";
 
+                    // Never persist a ban for a private/reserved IP unless
+                    // explicitly allowed: such an address almost always means
+                    // TrustProxies is misconfigured and we would ban our own
+                    // proxy/CDN, taking down all traffic. The offending request
+                    // is still blocked.
+                    if ($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false)) {
+                        Log::warning("Wafy: pattern detected from private/reserved IP {$clientIp} — ban skipped (check TrustProxies). {$reason}");
+
+                        return response()->json(['message' => 'Requête bloquée.'], 403);
+                    }
+
                     // Only escalate to a persistent IP ban once the strike
                     // threshold is reached. The offending request is blocked
                     // either way.
@@ -165,7 +176,7 @@ class DetectMaliciousRequests
                     'reason' => $reason,
                     'request_data' => [
                         'method' => $request->method(),
-                        'url' => $request->fullUrl(),
+                        'url' => $this->redactUrl($request),
                         'input' => $this->redact($request->all()),
                     ],
                 ]
@@ -203,6 +214,30 @@ class DetectMaliciousRequests
         });
 
         return $input;
+    }
+
+    /**
+     * Build the request URL for storage/notification with sensitive query
+     * parameters masked (e.g. ?token=..., ?api_key=...). Without this, secrets
+     * carried in the query string would be persisted and emailed in clear text —
+     * redact() only covers the request body, never the URL.
+     */
+    private function redactUrl(Request $request): string
+    {
+        $sensitive = array_map('strtolower', (array) config('wafy.sensitive_keys', []));
+        $query = $request->query();
+
+        if (!empty($sensitive) && is_array($query) && !empty($query)) {
+            array_walk_recursive($query, function (&$value, $key) use ($sensitive) {
+                if (is_string($key) && in_array(strtolower($key), $sensitive, true)) {
+                    $value = '[REDACTED]';
+                }
+            });
+        }
+
+        return empty($query)
+            ? $request->url()
+            : $request->url() . '?' . http_build_query($query);
     }
 
     /**

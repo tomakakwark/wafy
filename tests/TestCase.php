@@ -28,6 +28,13 @@ class TestCase extends Orchestra
             'prefix' => '',
         ]);
 
+        // Le seuil de PRODUCTION est désormais 3 ; la plupart des tests historiques
+        // valident la mécanique de ban sur une seule requête, on force donc 1 ici.
+        // Les tests s'exécutent depuis 127.0.0.1 (loopback), une IP « unbannable »
+        // par défaut — on autorise son ban dans l'environnement de test.
+        $app['config']->set('wafy.ban_threshold', 1);
+        $app['config']->set('wafy.ban_private_ips', true);
+
         // Exécuter les migrations du package
         $migration = include __DIR__ . '/../database/migrations/create_banned_ips_table.php';
         $migration->up();

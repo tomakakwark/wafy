@@ -131,13 +131,14 @@ patterns, the following options control how bans are applied:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `ban_threshold` | `1` | Number of detections from one IP (within `strike_window` minutes) before it is banned. **Raising this above 1 is strongly recommended** so a single false positive doesn't lock out a legitimate (shared/NAT/mobile) IP. The offending request is always blocked regardless. |
+| `ban_threshold` | `3` | Number of detections from one IP (within `strike_window` minutes) before it is banned. Kept above 1 so a single false positive doesn't lock out a legitimate (shared/NAT/mobile) IP. The offending request is always blocked regardless. |
 | `strike_window` | `60` | Minutes over which strikes accumulate. |
 | `ban_duration` | `1440` | Automatic ban lifetime in minutes (24h). Set to `null` for permanent bans. Manual `wafy:ban` bans are always permanent. |
+| `ban_private_ips` | `false` | When `false` (default), Wafy **refuses to ban private/reserved/loopback IPs** — a strong sign that TrustProxies is misconfigured and `$request->ip()` is the proxy, so banning it would take down all traffic. Set to `true` only if your clients legitimately have private IPs (internal network, no proxy). |
 | `max_scan_length` | `16384` | Max characters inspected per field — caps regex CPU cost (ReDoS protection). |
 | `fail_open` | `true` | If the ban database is unreachable, let requests through (`true`) instead of returning 503 for everyone (`false`). |
-| `scan_headers` | `['User-Agent', 'Referer']` | Request headers inspected for patterns. |
-| `sensitive_keys` | passwords, tokens, card fields… | Input keys whose values are redacted before a request is stored or notified. |
+| `scan_headers` | `['User-Agent', 'Referer', 'Cookie', 'X-Forwarded-For', 'X-Forwarded-Host', 'Origin', 'X-Api-Version']` | Request headers inspected for patterns. Only header **names** appear in logs, never their values. |
+| `sensitive_keys` | passwords, tokens, card fields… | Input keys whose values are redacted before a request is stored or notified (body **and** query-string parameters). |
 | `allowed_ips` | `[]` | IPs / CIDR ranges (IPv4 & IPv6) that bypass Wafy entirely. |
 
 Default protection covers:
