@@ -44,4 +44,14 @@ class BannedIp extends Model
     {
         return config('wafy.notifications.slack_webhook');
     }
+
+    public function routeNotificationForDiscord($notification = null)
+    {
+        return config('wafy.notifications.discord_webhook');
+    }
+
+    public function routeNotificationForTeams($notification = null)
+    {
+        return config('wafy.notifications.teams_webhook');
+    }
 }
