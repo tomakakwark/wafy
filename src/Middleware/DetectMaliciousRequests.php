@@ -78,33 +78,47 @@ class DetectMaliciousRequests
             return $next($request);
         }
 
-        // Never persist a ban for a private/reserved IP unless explicitly
-        // allowed: such an address almost always means TrustProxies is
-        // misconfigured and we would ban our own proxy/CDN, taking down all
-        // traffic. The offending request is still blocked.
-        if ($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false)) {
-            Log::warning("Wafy: {$summary} from private/reserved IP {$clientIp} — ban skipped (check TrustProxies).");
+        // A blocked request escalates toward a persistent ban only when it is
+        // strong enough (score >= ban_score_threshold). Weaker-but-blocked
+        // requests are refused (403) yet never contribute to a ban. Tune via
+        // ban_score_threshold: low (=score_threshold, the default) bans anything
+        // blocked; high blocks-but-rarely-bans; set score/ban thresholds and
+        // ban_threshold all to 1 for strict "ban on first match".
+        if ($result['score'] >= $this->banScoreThreshold()) {
+            // Never persist a ban for a private/reserved IP unless explicitly
+            // allowed: such an address almost always means TrustProxies is
+            // misconfigured and we would ban our own proxy/CDN. Still blocked.
+            if ($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false)) {
+                Log::warning("Wafy: {$summary} from private/reserved IP {$clientIp} — ban skipped (check TrustProxies).");
+            } elseif ($this->registerStrike($clientIp)) {
+                // Strike threshold reached -> persistent ban.
+                $this->banIp($request, $clientIp, $summary);
 
-            return response()->json(['message' => 'Requête bloquée.'], 403);
-        }
-
-        // Only escalate to a persistent IP ban once the strike threshold is
-        // reached. The offending request is blocked either way.
-        if ($this->registerStrike($clientIp)) {
-            $this->banIp($request, $clientIp, $summary);
-
-            return response()->json(['message' => 'Votre IP est bannie.'], 403);
+                return response()->json(['message' => 'Votre IP est bannie.'], 403);
+            }
         }
 
         return response()->json(['message' => 'Requête bloquée.'], 403);
     }
 
     /**
-     * Configured blocking threshold (minimum accumulated score to act on).
+     * Configured blocking threshold (minimum accumulated score to refuse a
+     * request).
      */
     private function scoreThreshold(): int
     {
         return max(1, (int) config('wafy.score_threshold', 4));
+    }
+
+    /**
+     * Score at/above which a blocked request becomes eligible for a persistent
+     * ban. Defaults to the blocking threshold when not configured.
+     */
+    private function banScoreThreshold(): int
+    {
+        $configured = config('wafy.ban_score_threshold');
+
+        return max(1, (int) ($configured ?? $this->scoreThreshold()));
     }
 
     /**

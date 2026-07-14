@@ -234,6 +234,42 @@ class DetectMaliciousRequestsTest extends TestCase
     }
 
     /** @test */
+    public function it_can_block_without_banning_when_ban_score_is_higher()
+    {
+        // Bloquer dès 4, mais ne bannir qu'à partir de 8.
+        config(['wafy.score_threshold' => 4, 'wafy.ban_score_threshold' => 8]);
+
+        // UNION SELECT vaut 5 : bloqué (>= 4) mais PAS banni (< 8).
+        $this->get('/test-waf?q=UNION SELECT 1')->assertStatus(403);
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
+    }
+
+    /** @test */
+    public function it_bans_when_the_score_reaches_the_ban_threshold()
+    {
+        config(['wafy.score_threshold' => 4, 'wafy.ban_score_threshold' => 8]);
+
+        // XSS <script> vaut 8 (script_tag 5 + script_brute 3) : bloqué ET banni.
+        $this->postJson('/test-waf', ['c' => '<script>alert(1)</script>'])->assertStatus(403);
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
+    }
+
+    /** @test */
+    public function it_can_ban_strictly_on_the_first_low_score_match()
+    {
+        // Mode strict : toute règle qui matche bannit immédiatement.
+        config([
+            'wafy.score_threshold' => 1,
+            'wafy.ban_score_threshold' => 1,
+            'wafy.ban_threshold' => 1,
+        ]);
+
+        // Un simple /wp-admin (score 2) suffit à bloquer ET bannir.
+        $this->get('/test-waf?path=' . urlencode('/wp-admin'))->assertStatus(403);
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
+    }
+
+    /** @test */
     public function the_ban_reason_contains_the_accumulated_score_and_rule_ids()
     {
         $this->get('/test-waf?q=UNION SELECT 1')->assertStatus(403);

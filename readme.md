@@ -134,7 +134,8 @@ patterns, the following options control how bans are applied:
 | `ban_threshold` | `3` | Number of detections from one IP (within `strike_window` minutes) before it is banned. Kept above 1 so a single false positive doesn't lock out a legitimate (shared/NAT/mobile) IP. The offending request is always blocked regardless. |
 | `strike_window` | `60` | Minutes over which strikes accumulate. |
 | `ban_duration` | `1440` | Automatic ban lifetime in minutes (24h). Set to `null` for permanent bans. Manual `wafy:ban` bans are always permanent. |
-| `score_threshold` | `4` | Minimum **accumulated rule score** before a request is blocked/banned (see *Detection scoring* below). |
+| `score_threshold` | `4` | Minimum **accumulated rule score** before a request is **blocked** (403). See *Detection scoring* below. |
+| `ban_score_threshold` | = `score_threshold` | Score at/above which a blocked request becomes **eligible for a persistent ban** (the actual escalation is still gated by `ban_threshold` strikes). Raise it to *block but not ban* medium threats; combine low thresholds with `ban_threshold=1` for strict *ban on first match*. |
 | `ban_private_ips` | `false` | When `false` (default), Wafy **refuses to ban private/reserved/loopback IPs** — a strong sign that TrustProxies is misconfigured and `$request->ip()` is the proxy, so banning it would take down all traffic. Set to `true` only if your clients legitimately have private IPs (internal network, no proxy). |
 | `max_scan_length` | `16384` | Max characters inspected per field — caps regex CPU cost (ReDoS protection). |
 | `fail_open` | `true` | If the ban database is unreachable, let requests through (`true`) instead of returning 503 for everyone (`false`). |
@@ -165,6 +166,17 @@ Rules live in the `rules` array, each `['id' => …, 'score' => …, 'pattern' =
 Disable a rule by removing it, tune sensitivity via its `score` or the global
 `score_threshold`. Ban reasons/logs reference the stable rule **id** and the
 total score (e.g. `WAF score 8/4 in RequestBody (rules: xss.script_tag, …)`).
+
+**Blocking vs banning.** `score_threshold` decides when a request is *blocked*
+(403); `ban_score_threshold` (default = `score_threshold`) decides when a blocked
+request may *escalate to a persistent IP ban* — the escalation itself still needs
+`ban_threshold` strikes. This lets you dial the whole spectrum:
+
+| Goal | Settings |
+| --- | --- |
+| Strict — ban on the first match | `score_threshold=1`, `ban_score_threshold=1`, `ban_threshold=1` |
+| Balanced (default) | `score_threshold=4`, `ban_score_threshold=4`, `ban_threshold=3` |
+| Block medium threats but only ban strong/repeat ones | `score_threshold=4`, `ban_score_threshold=8` |
 
 > **Backward compatibility:** a config still using the old flat `patterns` array
 > (list of regex strings) keeps working — each pattern is scored at the threshold,
