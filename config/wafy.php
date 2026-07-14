@@ -103,6 +103,19 @@ return [
     */
     'score_threshold' => (int) env('WAFY_SCORE_THRESHOLD', 4),
 
+    /*
+    | ban_score_threshold : score à partir duquel une requête (déjà bloquée)
+    |   devient ÉLIGIBLE à un bannissement persistant — l'escalade réelle restant
+    |   gouvernée par `ban_threshold` (nombre de strikes). Par défaut égal à
+    |   `score_threshold` : tout ce qui est bloqué peut mener à un ban (comportement
+    |   habituel). Réglages possibles :
+    |     • Bloquer SANS bannir les menaces moyennes : score_threshold=4,
+    |       ban_score_threshold=8 (bloque dès 4, ne bannit qu'à partir de 8).
+    |     • Bannissement STRICT au premier match : score_threshold=1,
+    |       ban_score_threshold=1, ban_threshold=1 (toute règle qui matche bannit).
+    */
+    'ban_score_threshold' => (int) env('WAFY_BAN_SCORE_THRESHOLD', (int) env('WAFY_SCORE_THRESHOLD', 4)),
+
     'rules' => [
         // === SQL Injection (SQLi) ===
         ['id' => 'sqli.union_select',    'score' => 5, 'pattern' => '/(union(\s+all)?\s+select)/i'],
