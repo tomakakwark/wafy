@@ -58,6 +58,20 @@ class DetectMaliciousRequests
             }
         }
 
+        // Velocity/rate detection catches scanners that walk many URLs without
+        // matching any pattern (typically a 404 storm). Skipped for private/
+        // reserved IPs we refuse to ban, so we never act on a proxy's aggregate
+        // traffic (self-DoS).
+        $rateApplies = (bool) config('wafy.rate_limit.enabled', false)
+            && !($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false));
+
+        if ($rateApplies) {
+            $breach = $this->velocityBreach($identity);
+            if ($breach !== null) {
+                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $breach, true);
+            }
+        }
+
         // Weighted scoring: accumulate the score of every rule that matches
         // this request and only act once the total reaches score_threshold.
         // A lone ambiguous signal no longer blocks legitimate traffic; a strong
@@ -65,18 +79,45 @@ class DetectMaliciousRequests
         $threshold = $this->scoreThreshold();
         $result = $this->evaluate($this->buildSubjects($request));
 
-        if ($result['score'] < $threshold) {
-            return $next($request);
+        if ($result['score'] >= $threshold) {
+            $summary = sprintf(
+                'WAF score %d/%d in %s (rules: %s)',
+                $result['score'],
+                $threshold,
+                implode(',', $result['fields']),
+                implode(', ', $result['rules'])
+            );
+
+            // A blocked request escalates toward a persistent ban only when it is
+            // strong enough (score >= ban_score_threshold); weaker-but-blocked
+            // requests are refused (403) yet never contribute to a ban.
+            return $this->actOnDetection(
+                $request,
+                $next,
+                $clientIp,
+                $identity,
+                $action,
+                $summary,
+                $result['score'] >= $this->banScoreThreshold()
+            );
         }
 
-        $summary = sprintf(
-            'WAF score %d/%d in %s (rules: %s)',
-            $result['score'],
-            $threshold,
-            implode(',', $result['fields']),
-            implode(', ', $result['rules'])
-        );
+        // No block: pass through and, for velocity, record the response status
+        // (a 404 storm is the signal a scanner leaves behind).
+        $response = $next($request);
 
+        if ($rateApplies) {
+            $this->recordResponseStatus($identity, $response);
+        }
+
+        return $response;
+    }
+
+    /**
+     * Apply the block/log/ban decision shared by pattern and velocity detection.
+     */
+    private function actOnDetection(Request $request, Closure $next, string $clientIp, string $identity, string $action, string $summary, bool $banEligible)
+    {
         Log::warning("Wafy: {$summary} from {$clientIp}");
 
         // In Log-Only mode we record the hit but never block or ban.
@@ -85,13 +126,7 @@ class DetectMaliciousRequests
             return $next($request);
         }
 
-        // A blocked request escalates toward a persistent ban only when it is
-        // strong enough (score >= ban_score_threshold). Weaker-but-blocked
-        // requests are refused (403) yet never contribute to a ban. Tune via
-        // ban_score_threshold: low (=score_threshold, the default) bans anything
-        // blocked; high blocks-but-rarely-bans; set score/ban thresholds and
-        // ban_threshold all to 1 for strict "ban on first match".
-        if ($result['score'] >= $this->banScoreThreshold()) {
+        if ($banEligible) {
             // Never persist a ban for a private/reserved IP unless explicitly
             // allowed: such an address almost always means TrustProxies is
             // misconfigured and we would ban our own proxy/CDN. Still blocked.
@@ -106,6 +141,58 @@ class DetectMaliciousRequests
         }
 
         return response()->json(['message' => 'Requête bloquée.'], 403);
+    }
+
+    /**
+     * Increment this IP's request counter and report a velocity breach (request
+     * rate or 404 rate over the configured limit), or null if within limits.
+     */
+    private function velocityBreach(string $identity): ?string
+    {
+        $window = max(1, (int) config('wafy.rate_limit.window', 60));
+        $maxRequests = (int) config('wafy.rate_limit.max_requests', 0);
+        $max404 = (int) config('wafy.rate_limit.max_404', 0);
+
+        $requests = $this->hitCounter('wafy:rate:req:' . $identity, $window);
+
+        if ($maxRequests > 0 && $requests > $maxRequests) {
+            return "Rate limit: {$requests} requests in {$window}s (max {$maxRequests})";
+        }
+
+        if ($max404 > 0) {
+            $notFound = (int) cache()->get('wafy:rate:404:' . $identity, 0);
+            if ($notFound > $max404) {
+                return "Scan detected: {$notFound} 404s in {$window}s (max {$max404})";
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Record a 404 response against this IP's rolling counter (velocity signal).
+     */
+    private function recordResponseStatus(string $identity, $response): void
+    {
+        $status = is_object($response) && method_exists($response, 'getStatusCode')
+            ? (int) $response->getStatusCode()
+            : 0;
+
+        if ($status === 404) {
+            $window = max(1, (int) config('wafy.rate_limit.window', 60));
+            $this->hitCounter('wafy:rate:404:' . $identity, $window);
+        }
+    }
+
+    /**
+     * Atomically increment a fixed-window counter and return its new value.
+     */
+    private function hitCounter(string $key, int $windowSeconds): int
+    {
+        $store = cache();
+        $store->add($key, 0, now()->addSeconds($windowSeconds));
+
+        return (int) $store->increment($key);
     }
 
     /**

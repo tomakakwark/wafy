@@ -107,6 +107,30 @@ return [
     ],
     'max_stored_value_length' => (int) env('WAFY_MAX_STORED_VALUE_LENGTH', 2048),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Détection par vélocité (rate limiting)
+    |--------------------------------------------------------------------------
+    | Attrape les scanners qui balaient beaucoup d'URLs SANS matcher de motif
+    | (souvent une rafale de 404 : /.git/config, /backup.zip, /admin.php …).
+    | Compté par IP (identité de ban, donc /64 en IPv6) sur une fenêtre glissante.
+    |
+    | Désactivé par défaut : réglez les seuils selon VOTRE trafic avant d'activer
+    | (un SPA ou une IP partagée/NAT peut être volumineux). Une infraction est
+    | traitée comme une détection (strike puis ban selon la politique habituelle).
+    | Ignoré pour les IP privées/réservées non bannissables, afin de ne jamais
+    | compter le trafic agrégé d'un proxy (anti self-DoS). Nécessite un cache
+    | partagé et persistant (redis/database/file).
+    |
+    |   max_requests / max_404 : mettre 0 pour désactiver ce compteur.
+    */
+    'rate_limit' => [
+        'enabled' => (bool) env('WAFY_RATE_LIMIT_ENABLED', false),
+        'window' => (int) env('WAFY_RATE_WINDOW', 60),               // secondes
+        'max_requests' => (int) env('WAFY_RATE_MAX_REQUESTS', 300),  // requêtes / fenêtre
+        'max_404' => (int) env('WAFY_RATE_MAX_404', 40),             // 404 / fenêtre
+    ],
+
     'notifications' => [
         'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),
         'channels' => ['mail'], // any of: 'mail', 'slack', 'discord', 'teams'

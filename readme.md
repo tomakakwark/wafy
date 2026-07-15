@@ -204,6 +204,27 @@ request may *escalate to a persistent IP ban* — the escalation itself still ne
 | Balanced (default) | `score_threshold=4`, `ban_score_threshold=4`, `ban_threshold=3` |
 | Block medium threats but only ban strong/repeat ones | `score_threshold=4`, `ban_score_threshold=8` |
 
+### Velocity / rate detection
+
+Signature rules miss scanners that walk many URLs that don't match any pattern
+(`/.git/config`, `/backup.zip`, `/admin.php`, …) — usually a burst of 404s. The
+optional velocity layer counts requests and 404s per IP over a sliding window and
+treats a breach like any other detection (block, then ban per your policy):
+
+```php
+'rate_limit' => [
+    'enabled'      => env('WAFY_RATE_LIMIT_ENABLED', false), // opt-in
+    'window'       => 60,   // seconds
+    'max_requests' => 300,  // total requests / IP / window (0 = off)
+    'max_404'      => 40,   // 404s / IP / window (0 = off)
+],
+```
+
+It's **off by default** — tune the limits to your traffic first (a busy SPA or a
+shared NAT IP can be high-volume). It counts per **ban identity** (so IPv6 is
+aggregated per `/64`), is **skipped for private/reserved IPs** you don't ban (so a
+misconfigured proxy never self-DoSes), and needs a **shared, persistent cache**.
+
 > **Backward compatibility:** a config still using the old flat `patterns` array
 > (list of regex strings) keeps working — each pattern is scored at the threshold,
 > preserving the pre-scoring "block on first match" behaviour until you migrate to
