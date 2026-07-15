@@ -21,8 +21,9 @@ class ToggleWafy extends Command
 
         $isEnabled = ($status === 'enable');
 
-        // Update the cache to persist the setting
-        cache()->put('wafy.enabled', $isEnabled); // Stores indefinitely
+        // Runtime override: stored indefinitely until changed or the cache is
+        // flushed (consistent with wafy:action).
+        cache()->forever('wafy.enabled', $isEnabled);
 
         if (in_array(config('cache.default'), ['array', 'null'], true)) {
             $this->warn('⚠  Cache par défaut « ' . config('cache.default') . ' » : ce réglage ne persistera pas d\'une requête à l\'autre. Configurez un cache partagé (redis/database/file) ou éditez config/wafy.php.');

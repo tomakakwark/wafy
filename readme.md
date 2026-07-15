@@ -104,6 +104,14 @@ Manage banned IPs directly from the terminal:
   ```
   Reports success/failure per channel and skips channels with no destination configured.
 
+- **Prune expired / old bans** (also enforces GDPR retention):
+  ```bash
+  php artisan wafy:prune                # delete expired temporary bans
+  php artisan wafy:prune --days=90      # also delete bans older than 90 days
+  ```
+  Schedule it in `app/Console/Kernel.php`: `$schedule->command('wafy:prune')->daily();`
+  Set `retention_days` in config to apply a default retention without `--days`.
+
 > **ℹ️ Note — `wafy:mode` and `wafy:action` are temporary runtime overrides.**
 > These two commands store their state in the **cache**, so they are meant for
 > momentary situations (testing, incident response). Any cache flush
@@ -149,7 +157,9 @@ patterns, the following options control how bans are applied:
 | `max_scan_length` | `16384` | Max characters inspected per field — caps regex CPU cost (ReDoS protection). |
 | `fail_open` | `true` | If the ban database is unreachable, let requests through (`true`) instead of returning 503 for everyone (`false`). |
 | `scan_headers` | `['User-Agent', 'Referer', 'Cookie', 'X-Forwarded-For', 'X-Forwarded-Host', 'Origin', 'X-Api-Version']` | Request headers inspected for patterns. Only header **names** appear in logs, never their values. |
-| `sensitive_keys` | passwords, tokens, card fields… | Input keys whose values are redacted before a request is stored or notified (body **and** query-string parameters). |
+| `sensitive_keys` | passwords, tokens, card fields… | Key **substrings** whose values are redacted before a request is stored or notified — `password` also covers `user_password`, `card` covers `billingCardNumber` (body **and** query-string). |
+| `max_stored_value_length` | `2048` | Long input values are truncated to this many characters in a stored ban record (prevents DB bloat/overflow). |
+| `retention_days` | `null` | Max age (days) of a ban record before `wafy:prune` deletes it (GDPR). `null` = keep until manually removed. |
 | `allowed_ips` | `[]` | IPs / CIDR ranges (IPv4 & IPv6) that bypass Wafy entirely. |
 
 Default protection covers:

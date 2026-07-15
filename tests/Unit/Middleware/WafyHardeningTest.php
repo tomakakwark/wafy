@@ -58,6 +58,38 @@ class WafyHardeningTest extends TestCase
     }
 
     /** @test */
+    public function it_redacts_sensitive_keys_by_substring_match()
+    {
+        $this->postJson('/waf-detect', [
+            'user_password' => 'super-secret',
+            'billing_card_number' => '4111111111111111',
+            'business' => 'ACME Corp',
+            'comment' => '<script>alert(1)</script>',
+        ])->assertStatus(403);
+
+        $input = BannedIp::first()->request_data['input'];
+        $this->assertSame('[REDACTED]', $input['user_password']);
+        $this->assertSame('[REDACTED]', $input['billing_card_number']);
+        // Not sensitive -> kept (guards against over-broad terms like "sin").
+        $this->assertSame('ACME Corp', $input['business']);
+    }
+
+    /** @test */
+    public function it_truncates_oversized_stored_input()
+    {
+        Config::set('wafy.max_stored_value_length', 100);
+
+        $this->postJson('/waf-detect', [
+            'blob' => str_repeat('x', 5000),
+            'comment' => '<script>alert(1)</script>',
+        ])->assertStatus(403);
+
+        $blob = BannedIp::first()->request_data['input']['blob'];
+        $this->assertLessThan(200, strlen($blob));
+        $this->assertStringContainsString('truncated', $blob);
+    }
+
+    /** @test */
     public function it_allows_ips_matching_a_cidr_range()
     {
         Config::set('wafy.allowed_ips', ['127.0.0.0/24']);
