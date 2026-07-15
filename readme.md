@@ -157,6 +157,13 @@ Default protection covers:
 - **Local File Inclusion (LFI)**: Directory traversal (`../`), system files (`/etc/passwd`, `/etc/shadow`), PHP wrappers (`php://`, `phar://`).
 - **Cross-Site Scripting (XSS)**: Script tags, **all inline `on*` event handlers** (whitespace-tolerant), dangerous tags, `javascript:`, executable data URIs.
 - **Remote Code Execution (RCE)**: Shell commands & separators (`;id`, `|whoami`), command substitution (`$(...)`), PHP execution functions.
+- **Template injection (SSTI)**: Twig/Jinja/Blade gadgets (`{{7*7}}`, `_self`), expression-language / Freemarker (`${T(java.lang.Runtime)…}`).
+- **Log4Shell / JNDI**: `${jndi:ldap://…}` and character-substitution obfuscation (`${${lower:j}ndi…}`).
+- **SSRF**: cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`), `gopher://`/`dict://`.
+- **NoSQL injection**: Mongo operators as JSON/array keys (`{"$ne":…}`, `param[$ne]=`).
+- **XXE**: external entities / `<!DOCTYPE … SYSTEM>`.
+- **Deserialization**: PHP (`O:8:"…":`), Java (`rO0AB…`), Python pickle opcodes.
+- **Also**: LDAP filter injection, prototype pollution (`__proto__`), CRLF header splitting.
 
 ### Detection scoring
 
