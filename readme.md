@@ -9,10 +9,15 @@
 ## Features
 
 - 🛡️ **IP Banning**: Automatically block IPs engaging in suspicious activity.
-- 🕵️ **Malicious Request Detection**: Detects SQLi, XSS, LFI, and RCE attempts.
-- ⏱️ **Temporary & Permanent Bans**: Configurable ban durations.
-- ⚙️ **Customizable Patterns**: Define your own regex patterns for detection.
-- 🖥️ **Artisan Commands**: Easily manage banned IPs via CLI.
+- 🕵️ **Malicious Request Detection**: SQLi, XSS, LFI, RCE, SSTI, JNDI/Log4Shell, SSRF, NoSQL, XXE, deserialization…
+- ⚖️ **Weighted scoring engine**: block on accumulated risk, not a single trigger — far fewer false positives.
+- 🐢 **Velocity & honeypot detection**: catch scanners that never match a pattern.
+- 🌍 **GeoIP & bot filtering**: allow/deny by country/ASN; flag known scanner user-agents.
+- 📈 **Exponential-backoff bans**: repeat offenders escalate automatically.
+- ⏱️ **Temporary & Permanent Bans**: Configurable durations, IPv6 `/64` aware.
+- 🔔 **Notifications**: Mail, Slack, Discord, Teams (+ `wafy:test-notification`).
+- ⚙️ **Customizable**: your own scored rules, configurable/localizable messages & status codes.
+- 🖥️ **Artisan Commands**: manage bans, prune (GDPR retention), toggle mode via CLI.
 
 ---
 
@@ -173,7 +178,15 @@ Default protection covers:
 - **NoSQL injection**: Mongo operators as JSON/array keys (`{"$ne":…}`, `param[$ne]=`).
 - **XXE**: external entities / `<!DOCTYPE … SYSTEM>`.
 - **Deserialization**: PHP (`O:8:"…":`), Java (`rO0AB…`), Python pickle opcodes.
-- **Also**: LDAP filter injection, prototype pollution (`__proto__`), CRLF header splitting.
+- **Also**: LDAP filter injection, prototype pollution (`__proto__`), CRLF header splitting, known **scanner user-agents** (sqlmap, nikto, nuclei…), and **honeypot trap paths**.
+
+Uploaded **file names and small text contents** are scanned too (multipart), and a
+`rawurldecode` variant is checked so `+`-bearing payloads aren't lost.
+
+Several layers are **opt-in** (tune to your traffic before enabling): velocity
+`rate_limit`, `geoip` country/ASN filtering, `flag_empty_user_agent`, and the
+`bot.generic_http_client` UA rule. Repeat-offender **backoff** and **honeypot**
+paths are on by default. See `config/wafy.php` for every option.
 
 ### Detection scoring
 

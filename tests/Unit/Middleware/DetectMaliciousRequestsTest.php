@@ -310,6 +310,61 @@ class DetectMaliciousRequestsTest extends TestCase
     }
 
     /** @test */
+    public function it_blocks_a_known_scanner_user_agent()
+    {
+        $this->get('/test-waf', ['User-Agent' => 'sqlmap/1.7.2#stable'])->assertStatus(403);
+    }
+
+    /** @test */
+    public function it_allows_a_normal_browser_user_agent()
+    {
+        $this->get('/test-waf', ['User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'])
+            ->assertStatus(200);
+    }
+
+    /** @test */
+    public function empty_user_agent_only_corroborates_when_enabled()
+    {
+        // A single medium SQL signal (score 3) is below the threshold on its own.
+        $uri = '/test-waf?q=' . urlencode('select name from users where id=1');
+
+        // Disabled (default): 3 < 4 -> passes even with an empty UA.
+        $this->get($uri, ['User-Agent' => ''])->assertStatus(200);
+
+        // Enabled: empty UA (+1) pushes 3 -> 4 -> blocked.
+        config(['wafy.flag_empty_user_agent' => true]);
+        $this->get($uri, ['User-Agent' => ''])->assertStatus(403);
+    }
+
+    /** @test */
+    public function it_scans_uploaded_file_content()
+    {
+        $malicious = \Illuminate\Http\UploadedFile::fake()
+            ->createWithContent('notes.txt', "1' UNION SELECT password FROM users-- -");
+
+        $this->post('/test-waf', ['upload' => $malicious])->assertStatus(403);
+    }
+
+    /** @test */
+    public function it_scans_uploaded_file_names()
+    {
+        // A SQLi-laden filename (multipart basenames any '/', so use a plain token).
+        $badName = \Illuminate\Http\UploadedFile::fake()
+            ->createWithContent('report union select 1.csv', 'harmless');
+
+        $this->post('/test-waf', ['upload' => $badName])->assertStatus(403);
+    }
+
+    /** @test */
+    public function it_scans_the_rawurldecode_variant_preserving_plus_signs()
+    {
+        // urldecode turns '+' into space (missing svg+xml); the rawurldecode
+        // variant keeps '+' so the dangerous SVG data URI is still caught.
+        $this->postJson('/test-waf', ['x' => 'data:image/svg+xml;base64,PHNjcmlwdD4='])
+            ->assertStatus(403);
+    }
+
+    /** @test */
     public function it_scans_newly_configured_headers()
     {
         // X-Forwarded-For n'était pas inspecté avant : un payload SQLi qui y est

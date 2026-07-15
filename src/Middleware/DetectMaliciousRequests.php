@@ -35,6 +35,19 @@ class DetectMaliciousRequests
         // Check action mode (block vs log)
         $action = cache('wafy.action', config('wafy.action', 'block'));
 
+        // GeoIP country/ASN policy (opt-in). A deny either blocks/bans outright
+        // or contributes a score, depending on wafy.geoip.action.
+        $geoScore = 0;
+        $geoReason = $this->geoDenyReason($clientIp);
+        if ($geoReason !== null) {
+            $geoAction = config('wafy.geoip.action', 'block');
+            if ($geoAction === 'score') {
+                $geoScore = max(0, (int) config('wafy.geoip.score', 4));
+            } else {
+                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $geoReason, $geoAction === 'ban');
+            }
+        }
+
         // Fast early exit: if the IP is already under an ACTIVE ban, skip the
         // (relatively expensive) pattern matching. A cached "clean" marker lets
         // legitimate repeat traffic skip the DB lookup entirely. Expired bans
@@ -44,7 +57,7 @@ class DetectMaliciousRequests
             try {
                 $existing = BannedIp::forIp($identity)->first();
                 if ($existing && $existing->isActive()) {
-                    return response()->json(['message' => 'Votre IP est bannie.'], 403);
+                    return $this->wafyBlock('banned', 'Votre IP est bannie.', 'banned', 403);
                 }
                 if (!$existing) {
                     $this->rememberClean($identity);
@@ -52,10 +65,27 @@ class DetectMaliciousRequests
             } catch (\Throwable $e) {
                 Log::error("Wafy: ban lookup failed for {$clientIp}: " . $e->getMessage());
                 if (!config('wafy.fail_open', true)) {
-                    return response()->json(['message' => 'Service temporairement indisponible.'], 503);
+                    return $this->wafyBlock('unavailable', 'Service temporairement indisponible.', 'unavailable', 503);
                 }
                 // fail-open: continue to pattern detection
             }
+        }
+
+        // Honeypot traps: a hit on an operator-defined trap URL is a near-certain
+        // bot. Checked before velocity/scoring so a probe blocks immediately and
+        // never runs the regex engine. Routed through actOnDetection so log-mode
+        // and the private-IP self-DoS guard still apply.
+        $trap = $this->honeypotHit($request);
+        if ($trap !== null) {
+            return $this->actOnDetection(
+                $request,
+                $next,
+                $clientIp,
+                $identity,
+                $action,
+                $trap,
+                (bool) config('wafy.honeypot_ban', true)
+            );
         }
 
         // Velocity/rate detection catches scanners that walk many URLs without
@@ -79,13 +109,29 @@ class DetectMaliciousRequests
         $threshold = $this->scoreThreshold();
         $result = $this->evaluate($this->buildSubjects($request));
 
+        // Empty/whitespace-only User-Agent: weak corroborating hint (score 1),
+        // opt-in. Never blocks alone; merely reinforces another signal.
+        if ($this->flagsEmptyUserAgent($request)) {
+            $result['score'] += 1;
+            $result['rules'][] = 'bot.empty_user_agent';
+            $result['fields'][] = 'User-Agent';
+        }
+
+        // Fold in a GeoIP score contribution (wafy.geoip.action = 'score').
+        if ($geoScore > 0) {
+            $result['score'] += $geoScore;
+            $result['rules'][] = 'geoip';
+            $result['fields'][] = 'GeoIP';
+        }
+
         if ($result['score'] >= $threshold) {
             $summary = sprintf(
-                'WAF score %d/%d in %s (rules: %s)',
+                'WAF score %d/%d in %s (rules: %s)%s',
                 $result['score'],
                 $threshold,
                 implode(',', $result['fields']),
-                implode(', ', $result['rules'])
+                implode(', ', $result['rules']),
+                $geoScore > 0 && $geoReason !== null ? ' | ' . $geoReason : ''
             );
 
             // A blocked request escalates toward a persistent ban only when it is
@@ -114,6 +160,51 @@ class DetectMaliciousRequests
     }
 
     /**
+     * Return a detection summary if the request path matches a configured
+     * honeypot trap (exact path or fnmatch glob), or null. Case-insensitive
+     * against the leading-slash-normalised path; fnmatch '*' also spans '/'.
+     */
+    private function honeypotHit(Request $request): ?string
+    {
+        $traps = array_filter((array) config('wafy.honeypot_paths', []), 'is_string');
+
+        if (empty($traps)) {
+            return null;
+        }
+
+        $path = '/' . ltrim($request->path(), '/');
+
+        foreach ($traps as $trap) {
+            $pattern = '/' . ltrim(trim((string) $trap), '/');
+
+            if ($pattern === '/') {
+                continue; // never trap the site root
+            }
+
+            if (@fnmatch($pattern, $path, FNM_CASEFOLD)) {
+                return sprintf("WAF honeypot: path '%s' matched trap '%s'", $path, $pattern);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether the request carries no (or whitespace-only) User-Agent and the
+     * operator opted in. A weak hint only (score 1): never blocks on its own.
+     */
+    private function flagsEmptyUserAgent(Request $request): bool
+    {
+        if (!config('wafy.flag_empty_user_agent', false)) {
+            return false;
+        }
+
+        $ua = $request->header('User-Agent');
+
+        return $ua === null || trim((string) $ua) === '';
+    }
+
+    /**
      * Apply the block/log/ban decision shared by pattern and velocity detection.
      */
     private function actOnDetection(Request $request, Closure $next, string $clientIp, string $identity, string $action, string $summary, bool $banEligible)
@@ -136,11 +227,11 @@ class DetectMaliciousRequests
                 // Strike threshold reached -> persistent ban.
                 $this->banIp($request, $clientIp, $summary);
 
-                return response()->json(['message' => 'Votre IP est bannie.'], 403);
+                return $this->wafyBlock('banned', 'Votre IP est bannie.', 'banned', 403);
             }
         }
 
-        return response()->json(['message' => 'Requête bloquée.'], 403);
+        return $this->wafyBlock('blocked', 'Requête bloquée.', 'blocked', 403);
     }
 
     /**
@@ -267,17 +358,20 @@ class DetectMaliciousRequests
         $matchedFields = [];
 
         foreach ($subjects as $fieldName => $value) {
-            $decodedValue = $this->recursiveUrldecode($value);
+            $variants = $this->recursiveUrldecode($value);
 
             foreach ($rules as $rule) {
                 if (isset($matchedRules[$rule['id']])) {
                     continue; // already counted this rule
                 }
 
-                if (@preg_match($rule['pattern'], $decodedValue) === 1) {
-                    $matchedRules[$rule['id']] = true;
-                    $matchedFields[$fieldName] = true;
-                    $score += $rule['score'];
+                foreach ($variants as $variant) {
+                    if (@preg_match($rule['pattern'], $variant) === 1) {
+                        $matchedRules[$rule['id']] = true;
+                        $matchedFields[$fieldName] = true;
+                        $score += $rule['score'];
+                        break; // count each rule at most once per field
+                    }
                 }
             }
         }
@@ -316,6 +410,16 @@ class DetectMaliciousRequests
             $subjects[$header] = $request->header($header) ?? '';
         }
 
+        // Multipart uploads: getContent() is empty (body consumed into $_FILES),
+        // so RawBody misses them. Scan attacker-controlled filenames and a
+        // bounded, text-only slice of small uploads. Form fields are already in
+        // RequestBody.
+        if (config('wafy.multipart.scan_files', true)) {
+            foreach ($this->multipartSubjects($request, $maxLen) as $name => $value) {
+                $subjects[$name] = $value;
+            }
+        }
+
         foreach ($subjects as $name => $value) {
             if (strlen($value) > $maxLen) {
                 // Scan the HEAD and the TAIL so a payload padded past the cut is
@@ -325,7 +429,118 @@ class DetectMaliciousRequests
             }
         }
 
+                return $subjects;
+    }
+
+    /**
+     * Extra subjects derived from multipart uploads: each file's client-provided
+     * name (always) plus a bounded text-only slice of small uploads.
+     *
+     * @return array<string,string>
+     */
+    private function multipartSubjects(Request $request, int $maxLen): array
+    {
+        try {
+            $files = $this->flattenFiles($request->allFiles());
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        if (empty($files)) {
+            return [];
+        }
+
+        $maxFiles = max(0, (int) config('wafy.multipart.max_files', 20));
+        $maxSize = max(0, (int) config('wafy.multipart.max_file_size', 1048576));
+        $perFileCap = min($maxLen, max(0, (int) config('wafy.multipart.max_file_bytes', 8192)));
+
+        $subjects = [];
+        $i = 0;
+
+        foreach ($files as $file) {
+            if ($i >= $maxFiles) {
+                break;
+            }
+            if (!is_object($file) || !method_exists($file, 'getClientOriginalName')) {
+                continue;
+            }
+
+            // Filename is attacker-controlled ("<script>.svg", "../../etc/passwd").
+            $name = (string) $file->getClientOriginalName();
+            if ($name !== '') {
+                $subjects['File#' . $i . '.name'] = $name;
+            }
+
+            $content = $this->readUploadSlice($file, $perFileCap, $maxSize);
+            if ($content !== null && $content !== '') {
+                $subjects['File#' . $i . '.content'] = $content;
+            }
+
+            $i++;
+        }
+
         return $subjects;
+    }
+
+    /**
+     * Read at most $cap bytes of an upload's content, or null when it must be
+     * skipped (invalid, too large, unreadable, or binary).
+     */
+    private function readUploadSlice($file, int $cap, int $maxSize): ?string
+    {
+        if ($cap <= 0) {
+            return null;
+        }
+
+        try {
+            if (method_exists($file, 'isValid') && !$file->isValid()) {
+                return null;
+            }
+            // Skip large uploads WITHOUT reading them (images/video/PDF).
+            $size = method_exists($file, 'getSize') ? (int) $file->getSize() : 0;
+            if ($maxSize > 0 && $size > $maxSize) {
+                return null;
+            }
+            $path = method_exists($file, 'getRealPath') ? $file->getRealPath() : false;
+            if ($path === false || $path === '' || !is_readable($path)) {
+                return null;
+            }
+            $slice = @file_get_contents($path, false, null, 0, $cap);
+            if ($slice === false || $slice === '') {
+                return null;
+            }
+            // Binary heuristic: a NUL byte in the head => not text; skip content.
+            if (strpos($slice, "\0") !== false) {
+                return null;
+            }
+
+            return $slice;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Flatten allFiles() (which may nest arrays like photos[]) into a flat list
+     * of UploadedFile objects.
+     *
+     * @return array<int,object>
+     */
+    private function flattenFiles(array $files): array
+    {
+        $flat = [];
+
+        foreach ($files as $item) {
+            if (is_array($item)) {
+                foreach ($this->flattenFiles($item) as $nested) {
+                    $flat[] = $nested;
+                }
+            } elseif (is_object($item)) {
+                $flat[] = $item;
+            }
+        }
+
+        return $flat;
     }
 
     /**
@@ -367,16 +582,28 @@ class DetectMaliciousRequests
      */
     private function banIp(Request $request, string $ip, string $reason): void
     {
-        $duration = config('wafy.ban_duration', 1440);
-        $bannedUntil = is_null($duration) ? null : now()->addMinutes((int) $duration);
         $identity = $this->banIdentity($ip);
+
+        // Read prior offense history. The row lingers after a ban expires (see
+        // BlockBannedIp / wafy:prune) precisely so a returning attacker escalates
+        // instead of resetting to the base duration.
+        try {
+            $existing = BannedIp::forIp($identity)->first();
+        } catch (\Throwable $e) {
+            Log::error("Wafy: offense lookup failed for {$identity}: " . $e->getMessage());
+            $existing = null;
+        }
+
+        $offenseCount = ($existing ? (int) $existing->offense_count : 0) + 1;
+        $bannedUntil = $this->computeBannedUntil($offenseCount);
 
         try {
             $bannedIpModel = BannedIp::updateOrCreate(
                 ['ip_address' => $identity],
                 [
                     'banned_until' => $bannedUntil,
-                    'reason' => $reason,
+                    'offense_count' => $offenseCount,
+                    'reason' => $reason . ' (offense #' . $offenseCount . ')',
                     'request_data' => [
                         'method' => $request->method(),
                         'url' => $this->redactUrl($request),
@@ -399,6 +626,55 @@ class DetectMaliciousRequests
                 Log::error("Wafy: Failed to send ban notification: " . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Compute banned_until for the Nth offense.
+     *
+     * duration(min) = backoff_base * backoff_multiplier^(offense-1), capped at
+     * backoff_max. Returns null (permanent) when backoff is off and ban_duration
+     * is null, or once offense_count reaches escalate_to_permanent_after. When
+     * backoff is disabled it preserves the historical fixed ban_duration.
+     *
+     * @return \Illuminate\Support\Carbon|null
+     */
+    private function computeBannedUntil(int $offenseCount)
+    {
+        // Backoff off -> historical fixed-duration behaviour (null = permanent).
+        if (!config('wafy.backoff_enabled', true)) {
+            $duration = config('wafy.ban_duration', 1440);
+            return is_null($duration) ? null : now()->addMinutes((int) $duration);
+        }
+
+        // Escalate to a permanent ban after N offenses (null/'' = never).
+        $escalate = config('wafy.escalate_to_permanent_after');
+        if ($escalate !== null && $escalate !== '' && $offenseCount >= (int) $escalate) {
+            return null;
+        }
+
+        // Base falls back to ban_duration; a null ban_duration meant "permanent".
+        $baseCfg = config('wafy.backoff_base', config('wafy.ban_duration', 1440));
+        if ($baseCfg === null || (int) $baseCfg < 1) {
+            return is_null(config('wafy.ban_duration', 1440)) ? null : now()->addMinutes(1);
+        }
+        $base = (int) $baseCfg;
+
+        $multiplier = (float) config('wafy.backoff_multiplier', 2);
+        if ($multiplier < 1) {
+            $multiplier = 1.0; // never shrink a ban
+        }
+
+        $minutes = $base * pow($multiplier, max(0, $offenseCount - 1));
+
+        $max = config('wafy.backoff_max');
+        if ($max !== null && $max !== '' && (int) $max > 0) {
+            $minutes = min($minutes, (float) (int) $max);
+        }
+
+        // Overflow guard: cap at ~68 years of minutes, always >= 1.
+        $minutes = (int) max(1, min($minutes, 36000000));
+
+        return now()->addMinutes($minutes);
     }
 
     /**
@@ -491,21 +767,38 @@ class DetectMaliciousRequests
     }
 
     /**
-     * Recursively urldecode a string to handle multi-encoded payloads.
+     * Recursively decode a string to expose multi-encoded payloads, returning
+     * the DISTINCT decoded variants to scan:
+     *   - urldecode()    : standard form-encoding, also rewrites '+' -> space.
+     *   - rawurldecode() : RFC 3986, keeps '+' literal, so a payload relying on
+     *     a literal '+' is not corrupted/lost.
+     * Each decoder loops up to depth 5 (nested-encoding / DoS guard). Duplicates
+     * are collapsed; evaluate() counts each rule once, so scanning both variants
+     * never double-flags.
+     *
+     * @return string[]
      */
-    private function recursiveUrldecode($string)
+    private function recursiveUrldecode($string): array
     {
-        $prev = '';
-        $curr = $string;
+        $string = (string) $string;
+        $variants = [];
 
-        // Limite à 5 décodages pour éviter les boucles infinies ou les attaques DoS
-        $maxDepth = 5;
-        while ($curr !== $prev && $maxDepth > 0) {
-            $prev = $curr;
-            $curr = urldecode($curr);
-            $maxDepth--;
+        foreach (['urldecode', 'rawurldecode'] as $decoder) {
+            $prev = '';
+            $curr = $string;
+            $maxDepth = 5;
+
+            while ($curr !== $prev && $maxDepth > 0) {
+                $prev = $curr;
+                $curr = $decoder($curr);
+                $maxDepth--;
+            }
+
+            if (!in_array($curr, $variants, true)) {
+                $variants[] = $curr;
+            }
         }
 
-        return $curr;
+        return $variants;
     }
 }
