@@ -48,6 +48,18 @@ class BlockBannedIpTest extends TestCase
     }
 
     /** @test */
+    public function it_does_not_block_a_banned_ip_in_log_mode()
+    {
+        // Mode log : on trace mais on ne bloque pas, même une IP déjà bannie.
+        config(['wafy.action' => 'log']);
+        BannedIp::create(['ip_address' => '127.0.0.1', 'banned_until' => null]);
+
+        $this->get('/test-route')
+            ->assertStatus(200)
+            ->assertSee('OK');
+    }
+
+    /** @test */
     public function it_unbans_expired_ips()
     {
         BannedIp::create(['ip_address' => '127.0.0.1', 'banned_until' => now()->subMinutes(1)]);

@@ -19,8 +19,9 @@ class SetAction extends Command
             return 1;
         }
 
-        // Cache for 1 year (essentially permanent until cleared or changed)
-        Cache::put('wafy.action', $action, now()->addYear());
+        // Runtime override: stored indefinitely until changed or the cache is
+        // flushed (consistent with wafy:mode).
+        Cache::forever('wafy.action', $action);
 
         if (in_array(config('cache.default'), ['array', 'null'], true)) {
             $this->warn('⚠  Cache par défaut « ' . config('cache.default') . ' » : ce réglage ne persistera pas d\'une requête à l\'autre. Configurez un cache partagé (redis/database/file) ou éditez config/wafy.php.');

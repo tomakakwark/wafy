@@ -49,6 +49,15 @@ return [
     'ipv6_ban_prefix' => (int) env('WAFY_IPV6_BAN_PREFIX', 64),
 
     /*
+    | retention_days : durée de conservation maximale d'un enregistrement de ban
+    |   (RGPD : l'IP + les données de requête ne sont pas gardées indéfiniment).
+    |   null = pas de limite. La commande `wafy:prune` supprime les bans
+    |   temporaires expirés et, si défini, les bans plus vieux que ce nombre de
+    |   jours. Planifiez-la (ex. $schedule->command('wafy:prune')->daily()).
+    */
+    'retention_days' => env('WAFY_RETENTION_DAYS', null),
+
+    /*
     |--------------------------------------------------------------------------
     | Hardening
     |--------------------------------------------------------------------------
@@ -58,7 +67,11 @@ return [
     |   (true) instead of returning an error for every request (false).
     | scan_headers : request headers inspected for malicious patterns.
     | sensitive_keys : input keys whose values are redacted before a request is
-    |   persisted or sent in a notification (avoids storing passwords/PII).
+    |   persisted or sent in a notification (avoids storing passwords/PII). Matched
+    |   as a SUBSTRING of the key name, so "password" also covers "user_password",
+    |   "billingCardNumber" is covered by "card", etc.
+    | max_stored_value_length : long input values are truncated to this many chars
+    |   before being stored in a ban record (avoids bloating / overflowing the DB).
     */
     'max_scan_length' => (int) env('WAFY_MAX_SCAN_LENGTH', 16384),
     'fail_open' => (bool) env('WAFY_FAIL_OPEN', true),
@@ -87,11 +100,12 @@ return [
     // donc scanner Cookie / X-Forwarded-For ne persiste pas leur contenu.
     'scan_headers' => ['User-Agent', 'Referer', 'Cookie', 'X-Forwarded-For', 'X-Forwarded-Host', 'Origin', 'X-Api-Version'],
     'sensitive_keys' => [
-        'password', 'password_confirmation', 'current_password',
-        'token', '_token', 'api_token', 'api_key', 'apikey', 'secret',
-        'authorization', 'access_token', 'refresh_token', 'private_key',
-        'credit_card', 'card_number', 'cvv', 'cvc',
+        'password', 'passwd', 'passphrase', 'passcode',
+        'token', 'secret', 'authorization', 'bearer', 'apikey', 'api_key',
+        'private_key', 'credential',
+        'card', 'cvv', 'cvc', 'iban', 'ssn', 'session_id',
     ],
+    'max_stored_value_length' => (int) env('WAFY_MAX_STORED_VALUE_LENGTH', 2048),
 
     'notifications' => [
         'enabled' => env('WAFY_NOTIFICATIONS_ENABLED', false),

@@ -46,17 +46,26 @@ class BlockBannedIp
         }
 
         if ($bannedIp) {
-            // Si banned_until est null, c'est un ban permanent via DetectMaliciousRequests ou commande
-            if (is_null($bannedIp->banned_until)) {
-                return response()->json(['message' => 'Votre IP est bannie définitivement.'], 403);
+            // Ban permanent (banned_until null) ou temporaire encore valide.
+            $isActive = is_null($bannedIp->banned_until) || now()->lessThan($bannedIp->banned_until);
+
+            if ($isActive) {
+                // En mode "log", on n'interdit rien : on trace et on laisse passer,
+                // conformément à la sémantique documentée du mode log-only.
+                $action = cache('wafy.action', config('wafy.action', 'block'));
+                if ($action === 'log') {
+                    Log::info("Wafy (Log-Only): request from banned IP {$clientIp} allowed (would be blocked in block mode).");
+                    return $next($request);
+                }
+
+                $message = is_null($bannedIp->banned_until)
+                    ? 'Votre IP est bannie définitivement.'
+                    : 'Votre IP est temporairement bannie.';
+
+                return response()->json(['message' => $message], 403);
             }
 
-            // Si le bannissement est temporaire et encore valide
-            if (now()->lessThan($bannedIp->banned_until)) {
-                return response()->json(['message' => 'Votre IP est temporairement bannie.'], 403);
-            }
-
-            // Si on arrive ici, c'est que le ban temporaire est expiré, on le nettoie
+            // Ban temporaire expiré -> on le nettoie.
             $bannedIp->delete();
         }
 

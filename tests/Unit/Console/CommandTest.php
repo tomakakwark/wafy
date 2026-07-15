@@ -85,4 +85,32 @@ class CommandTest extends TestCase
         // Manual bans normalise to the same /64 identity the middleware uses.
         $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '2001:db8:1:2::/64']);
     }
+
+    /** @test */
+    public function prune_removes_expired_bans_and_keeps_active_ones()
+    {
+        BannedIp::create(['ip_address' => '1.1.1.1', 'banned_until' => now()->subMinute()]); // expiré
+        BannedIp::create(['ip_address' => '2.2.2.2', 'banned_until' => now()->addDay()]);     // actif
+        BannedIp::create(['ip_address' => '3.3.3.3', 'banned_until' => null]);                 // permanent
+
+        $this->artisan('wafy:prune')->assertExitCode(0);
+
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '1.1.1.1']);
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '2.2.2.2']);
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '3.3.3.3']);
+    }
+
+    /** @test */
+    public function prune_with_days_removes_bans_older_than_the_retention()
+    {
+        $old = BannedIp::create(['ip_address' => '4.4.4.4', 'banned_until' => null]);
+        BannedIp::where('id', $old->id)->update(['created_at' => now()->subDays(40)]);
+
+        BannedIp::create(['ip_address' => '5.5.5.5', 'banned_until' => null]); // récent
+
+        $this->artisan('wafy:prune', ['--days' => 30])->assertExitCode(0);
+
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '4.4.4.4']);
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '5.5.5.5']);
+    }
 }

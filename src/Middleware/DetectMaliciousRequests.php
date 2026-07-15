@@ -293,7 +293,7 @@ class DetectMaliciousRequests
                     'request_data' => [
                         'method' => $request->method(),
                         'url' => $this->redactUrl($request),
-                        'input' => $this->redact($request->all()),
+                        'input' => $this->boundStoredInput($this->redact($request->all())),
                     ],
                 ]
             );
@@ -327,12 +327,56 @@ class DetectMaliciousRequests
         }
 
         array_walk_recursive($input, function (&$value, $key) use ($sensitive) {
-            if (is_string($key) && in_array(strtolower($key), $sensitive, true)) {
+            if ($this->keyIsSensitive($key, $sensitive)) {
                 $value = '[REDACTED]';
             }
         });
 
         return $input;
+    }
+
+    /**
+     * Bound the size of the input stored in a ban record: truncate long leaf
+     * values and, as a hard backstop, replace the whole payload if it would
+     * still overflow a TEXT column (~64KB).
+     */
+    private function boundStoredInput(array $input): array
+    {
+        $maxValue = max(64, (int) config('wafy.max_stored_value_length', 2048));
+
+        array_walk_recursive($input, function (&$value) use ($maxValue) {
+            if (is_string($value) && strlen($value) > $maxValue) {
+                $value = substr($value, 0, $maxValue) . '…[truncated]';
+            }
+        });
+
+        if (strlen((string) json_encode($input)) > 60000) {
+            return ['_truncated' => true, '_note' => 'input too large to store'];
+        }
+
+        return $input;
+    }
+
+    /**
+     * Whether a key should be redacted. Matches a sensitive term anywhere in the
+     * key name (e.g. "user_password", "billingCardNumber") — erring toward
+     * over-redaction rather than leaking a secret.
+     */
+    private function keyIsSensitive($key, array $sensitive): bool
+    {
+        if (!is_string($key) && !is_int($key)) {
+            return false;
+        }
+
+        $key = strtolower((string) $key);
+
+        foreach ($sensitive as $term) {
+            if ($term !== '' && strpos($key, $term) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -348,7 +392,7 @@ class DetectMaliciousRequests
 
         if (!empty($sensitive) && is_array($query) && !empty($query)) {
             array_walk_recursive($query, function (&$value, $key) use ($sensitive) {
-                if (is_string($key) && in_array(strtolower($key), $sensitive, true)) {
+                if ($this->keyIsSensitive($key, $sensitive)) {
                     $value = '[REDACTED]';
                 }
             });

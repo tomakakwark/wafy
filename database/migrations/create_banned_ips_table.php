@@ -11,7 +11,7 @@ return new class extends Migration {
             $table->id();
             $table->string('ip_address')->unique();
             $table->text('reason')->nullable();
-            $table->text('request_data')->nullable();
+            $table->longText('request_data')->nullable();
             $table->timestamp('banned_until')->nullable();
             $table->timestamps();
         });
