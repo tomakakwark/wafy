@@ -13,6 +13,7 @@ return new class extends Migration {
             $table->text('reason')->nullable();
             $table->longText('request_data')->nullable();
             $table->timestamp('banned_until')->nullable();
+            $table->unsignedInteger('offense_count')->default(0);
             $table->timestamps();
         });
     }

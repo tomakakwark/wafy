@@ -59,6 +59,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Backoff exponentiel des bans
+    |--------------------------------------------------------------------------
+    | Un récidiviste écope de bans de plus en plus longs : durée (minutes) =
+    | backoff_base * backoff_multiplier^(offense-1), plafonnée à backoff_max. Le
+    | compteur d'offenses survit à l'expiration du ban (la ligne n'est plus
+    | supprimée à l'expiration ni par wafy:prune avant backoff_reset_after jours),
+    | pour qu'un attaquant ne réinitialise pas sa peine en attendant. Désactivez
+    | pour retrouver la durée fixe historique (ban_duration).
+    */
+    'backoff_enabled' => (bool) env('WAFY_BACKOFF_ENABLED', true),
+    'backoff_base' => (int) env('WAFY_BACKOFF_BASE', (int) env('WAFY_BAN_DURATION', 1440)),
+    'backoff_multiplier' => (float) env('WAFY_BACKOFF_MULTIPLIER', 2),
+    'backoff_max' => (int) env('WAFY_BACKOFF_MAX', 43200), // 30 jours
+    'escalate_to_permanent_after' => env('WAFY_ESCALATE_TO_PERMANENT_AFTER', null), // null = jamais
+    'backoff_reset_after' => (int) env('WAFY_BACKOFF_RESET_AFTER', 30), // jours de calme avant oubli
+
+    /*
+    |--------------------------------------------------------------------------
     | Hardening
     |--------------------------------------------------------------------------
     | max_scan_length : maximum number of characters inspected per field. Caps
@@ -108,6 +126,43 @@ return [
     'max_stored_value_length' => (int) env('WAFY_MAX_STORED_VALUE_LENGTH', 2048),
 
     /*
+    | Uploads multipart : le corps brut (getContent) est vide en multipart, donc
+    | les fichiers échappent au scan. On inspecte le NOM (toujours) et une tranche
+    | texte bornée des petits uploads. scan_files=false si votre app accepte
+    | légitimement du code/SQL/HTML uploadé (sinon faux positifs possibles).
+    */
+    'multipart' => [
+        'scan_files' => (bool) env('WAFY_MULTIPART_SCAN_FILES', true),
+        'max_files' => (int) env('WAFY_MULTIPART_MAX_FILES', 20),
+        'max_file_size' => (int) env('WAFY_MULTIPART_MAX_FILE_SIZE', 1048576), // octets ; au-dessus = non lu
+        'max_file_bytes' => (int) env('WAFY_MULTIPART_MAX_FILE_BYTES', 8192),  // octets scannés / fichier
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Honeypot / chemins pièges
+    |--------------------------------------------------------------------------
+    | URLs qu'aucun client légitime ne demande (sondes WordPress, git, phpMyAdmin…).
+    | Tout hit est un bot quasi certain : bloqué et, si honeypot_ban=true, escaladé
+    | vers un ban comme n'importe quelle détection. Comparé à $request->path()
+    | (sans query), insensible à la casse, après normalisation du slash initial.
+    | Exact ('/wp-login.php') ou glob fnmatch ('/wp-admin/*' — le '*' traverse '/').
+    | ⚠ Un glob comme '/admin/*' piégera un '/admin/dashboard' légitime : n'ajoutez
+    | que des chemins que votre app ne sert JAMAIS, préférez l'exact en cas de doute.
+    */
+    'honeypot_paths' => [
+        '/wp-login.php',
+        '/xmlrpc.php',
+        '/wp-config.php',
+        '/.git/config',
+        '/.git/HEAD',
+        '/phpmyadmin',
+        '/phpmyadmin/*',
+        '/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php',
+    ],
+    'honeypot_ban' => (bool) env('WAFY_HONEYPOT_BAN', true),
+
+    /*
     |--------------------------------------------------------------------------
     | Détection par vélocité (rate limiting)
     |--------------------------------------------------------------------------
@@ -129,6 +184,56 @@ return [
         'window' => (int) env('WAFY_RATE_WINDOW', 60),               // secondes
         'max_requests' => (int) env('WAFY_RATE_MAX_REQUESTS', 300),  // requêtes / fenêtre
         'max_404' => (int) env('WAFY_RATE_MAX_404', 40),             // 404 / fenêtre
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Messages & codes de réponse (personnalisables / localisables)
+    |--------------------------------------------------------------------------
+    | Chaque valeur peut être une chaîne littérale (défaut) OU une clé de
+    | traduction : si une ligne de langue existe (Lang::has), elle est passée à
+    | trans() selon la locale ; sinon la chaîne est renvoyée telle quelle. Les
+    | défauts ci-dessous reproduisent exactement le comportement historique.
+    */
+    'messages' => [
+        'banned' => env('WAFY_MSG_BANNED', 'Votre IP est bannie.'),
+        'blocked' => env('WAFY_MSG_BLOCKED', 'Requête bloquée.'),
+        'unavailable' => env('WAFY_MSG_UNAVAILABLE', 'Service temporairement indisponible.'),
+        'banned_permanent' => env('WAFY_MSG_BANNED_PERMANENT', 'Votre IP est bannie définitivement.'),
+        'banned_temporary' => env('WAFY_MSG_BANNED_TEMPORARY', 'Votre IP est temporairement bannie.'),
+    ],
+    'status_codes' => [
+        'blocked' => (int) env('WAFY_STATUS_BLOCKED', 403),
+        'banned' => (int) env('WAFY_STATUS_BANNED', 403),
+        'unavailable' => (int) env('WAFY_STATUS_UNAVAILABLE', 503),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | GeoIP — filtrage par pays / ASN
+    |--------------------------------------------------------------------------
+    | Opt-in. Ne REQUIERT aucune dépendance : fournit un résolveur par défaut
+    | best-effort (MaxMind geoip2/geoip2 si une base est configurée, sinon
+    | torann/geoip, sinon l'extension geoip_*) qui DÉGRADE proprement (aucune
+    | base -> aucun blocage, un warning). Vous pouvez brancher votre propre
+    | résolveur via 'resolver' (une Closure fn(?string $ip): ['country'=>, 'asn'=>]
+    | ou le nom d'une classe implémentant Bdsa\Wafy\Contracts\GeoIpResolver).
+    |   mode   : 'deny' (bloque les pays listés) ou 'allow' (n'autorise QUE les
+    |            pays listés ; un pays inconnu passe, pour ne pas casser le trafic).
+    |   action : 'block' (403), 'ban' (403 + ban), ou 'score' (+geoip.score au
+    |            moteur de scoring, corrobore d'autres signaux).
+    | Ignoré pour les IP privées/réservées (anti self-DoS).
+    */
+    'geoip' => [
+        'enabled' => (bool) env('WAFY_GEOIP_ENABLED', false),
+        'mode' => env('WAFY_GEOIP_MODE', 'deny'), // 'deny' | 'allow'
+        'countries' => [], // ex. ['RU', 'CN', 'KP'] (deny) ou ['FR', 'BE'] (allow)
+        'deny_asns' => [], // ex. [14061, 16509] (hébergeurs/VPN)
+        'action' => env('WAFY_GEOIP_ACTION', 'block'), // 'block' | 'ban' | 'score'
+        'score' => (int) env('WAFY_GEOIP_SCORE', 4),
+        'resolver' => null, // Closure|string|null
+        'database' => env('WAFY_GEOIP_DB', ''),     // chemin base MaxMind pays
+        'asn_database' => env('WAFY_GEOIP_ASN_DB', ''), // chemin base MaxMind ASN
     ],
 
     'notifications' => [
@@ -176,6 +281,11 @@ return [
     |       ban_score_threshold=1, ban_threshold=1 (toute règle qui matche bannit).
     */
     'ban_score_threshold' => (int) env('WAFY_BAN_SCORE_THRESHOLD', (int) env('WAFY_SCORE_THRESHOLD', 4)),
+
+    // Ajoute un indice faible (score 1) quand la requête n'a AUCUN User-Agent.
+    // Beaucoup de clients serveur-à-serveur légitimes n'en envoient pas : off par
+    // défaut, et à 1 il ne bloque jamais seul (corrobore un autre signal).
+    'flag_empty_user_agent' => (bool) env('WAFY_FLAG_EMPTY_USER_AGENT', false),
 
     'rules' => [
         // === SQL Injection (SQLi) ===
@@ -273,5 +383,16 @@ return [
         ['id' => 'scanner.sensitive',    'score' => 2, 'pattern' => '/(\/manager\/html|\/wp-admin|\/wp-content\/plugins|\/cgi-bin)/i'],
         ['id' => 'scanner.exploit_path', 'score' => 3, 'pattern' => '/(\/XMLPService|\/RPC2|\/igd\/v1\/get-users-data|\/convertCSVtoParquet\.php)/i'],
         ['id' => 'scanner.checkwaf',     'score' => 2, 'pattern' => '/(checkwaf=)/i'],
+
+        // === Bot / Scanner User-Agents (User-Agent est déjà dans scan_headers) ===
+        // Outils offensifs non ambigus : tokens distinctifs bornés par \b (pas des
+        // mots anglais). « nuclei » ancré sur « nuclei/ » ou « projectdiscovery »
+        // (nuclei = pluriel de nucleus) ; nmap sur « nmap scripting engine » ;
+        // curl/python-requests/httpx/hydra VOLONTAIREMENT absents (double usage /
+        // mots courants — couverts par la vélocité et les règles de charge).
+        ['id' => 'bot.scanner_ua',       'score' => 5, 'pattern' => '/(\bsqlmap\b|\bnikto\b|\bacunetix\b|\bnetsparker\b|\binvicti\b|\bnessus\b|\bopenvas\b|\barachni\b|\bw3af\b|\bskipfish\b|\bwpscan\b|\bjoomscan\b|\bdroopescan\b|\bwhatweb\b|\bwfuzz\b|\bffuf\b|\bdirbuster\b|\bgobuster\b|\bferoxbuster\b|\bdirsearch\b|\bmasscan\b|\bzgrab\b|\bfimap\b|\bhavij\b|\bjbrofuzz\b|nuclei\/|projectdiscovery|nmap scripting engine)/i'],
+        // OPTIONNEL — clients HTTP génériques (double usage). Score 1 (indice seul,
+        // ne bloque jamais). Décommentez et validez contre VOTRE trafic.
+        // ['id' => 'bot.generic_http_client', 'score' => 1, 'pattern' => '/(\bpython-requests\/|\blibwww-perl\/|\bGo-http-client\/|\bWget\/|\bcurl\/)/i'],
     ],
 ];

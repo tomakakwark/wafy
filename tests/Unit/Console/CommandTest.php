@@ -89,6 +89,9 @@ class CommandTest extends TestCase
     /** @test */
     public function prune_removes_expired_bans_and_keeps_active_ones()
     {
+        // Sans backoff, un ban expiré est purgé immédiatement.
+        config(['wafy.backoff_enabled' => false]);
+
         BannedIp::create(['ip_address' => '1.1.1.1', 'banned_until' => now()->subMinute()]); // expiré
         BannedIp::create(['ip_address' => '2.2.2.2', 'banned_until' => now()->addDay()]);     // actif
         BannedIp::create(['ip_address' => '3.3.3.3', 'banned_until' => null]);                 // permanent
@@ -98,6 +101,23 @@ class CommandTest extends TestCase
         $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '1.1.1.1']);
         $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '2.2.2.2']);
         $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '3.3.3.3']);
+    }
+
+    /** @test */
+    public function prune_keeps_recently_expired_bans_within_the_backoff_grace_window()
+    {
+        // Avec backoff (défaut), une offense récemment expirée survit pour l'escalade.
+        config(['wafy.backoff_enabled' => true, 'wafy.backoff_reset_after' => 30]);
+
+        $recent = BannedIp::create(['ip_address' => '6.6.6.6', 'banned_until' => now()->subMinute(), 'offense_count' => 2]);
+
+        $stale = BannedIp::create(['ip_address' => '7.7.7.7', 'banned_until' => now()->subDay(), 'offense_count' => 1]);
+        BannedIp::where('id', $stale->id)->update(['updated_at' => now()->subDays(40)]);
+
+        $this->artisan('wafy:prune')->assertExitCode(0);
+
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '6.6.6.6']);     // récent -> gardé
+        $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '7.7.7.7']); // calme > 30j -> oublié
     }
 
     /** @test */

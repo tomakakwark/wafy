@@ -60,18 +60,31 @@ class BlockBannedIpTest extends TestCase
     }
 
     /** @test */
-    public function it_unbans_expired_ips()
+    public function an_expired_ban_lets_the_request_through()
     {
         BannedIp::create(['ip_address' => '127.0.0.1', 'banned_until' => now()->subMinutes(1)]);
 
-        $response = $this->get('/test-route');
+        $this->get('/test-route')->assertStatus(200)->assertSee('OK');
+    }
 
-        // La première requête déclenche le nettoyage mais peut encore retourner 403 si le middleware ne laisse pas passer immédiatement (dépend de l'implémentation exact).
-        // Dans notre implémentation refactorée : "Si ... expiré... $bannedIp->delete(); return $next($request);"
-        // Donc ça devrait passer tout de suite.
+    /** @test */
+    public function an_expired_ban_row_is_kept_when_backoff_is_enabled()
+    {
+        // Défaut backoff -> la ligne survit à l'expiration (pour l'escalade).
+        BannedIp::create(['ip_address' => '127.0.0.1', 'banned_until' => now()->subMinutes(1), 'offense_count' => 1]);
 
-        $response->assertStatus(200);
-        $response->assertSee('OK');
+        $this->get('/test-route')->assertStatus(200);
+
+        $this->assertDatabaseHas('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
+    }
+
+    /** @test */
+    public function an_expired_ban_row_is_deleted_when_backoff_is_disabled()
+    {
+        config(['wafy.backoff_enabled' => false]);
+        BannedIp::create(['ip_address' => '127.0.0.1', 'banned_until' => now()->subMinutes(1)]);
+
+        $this->get('/test-route')->assertStatus(200);
 
         $this->assertDatabaseMissing('wafy_banned_ips', ['ip_address' => '127.0.0.1']);
     }

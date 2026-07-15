@@ -40,7 +40,7 @@ class BlockBannedIp
         } catch (\Throwable $e) {
             Log::error("Wafy: ban lookup failed for {$clientIp}: " . $e->getMessage());
             if (!config('wafy.fail_open', true)) {
-                return response()->json(['message' => 'Service temporairement indisponible.'], 503);
+                return $this->wafyBlock('unavailable', 'Service temporairement indisponible.', 'unavailable', 503);
             }
             return $next($request);
         }
@@ -58,15 +58,17 @@ class BlockBannedIp
                     return $next($request);
                 }
 
-                $message = is_null($bannedIp->banned_until)
-                    ? 'Votre IP est bannie définitivement.'
-                    : 'Votre IP est temporairement bannie.';
-
-                return response()->json(['message' => $message], 403);
+                return is_null($bannedIp->banned_until)
+                    ? $this->wafyBlock('banned_permanent', 'Votre IP est bannie définitivement.', 'banned', 403)
+                    : $this->wafyBlock('banned_temporary', 'Votre IP est temporairement bannie.', 'banned', 403);
             }
 
-            // Ban temporaire expiré -> on le nettoie.
-            $bannedIp->delete();
+            // Ban temporaire expiré. En mode backoff, on GARDE la ligne pour que
+            // le compteur d'offenses survive (escalade) ; sinon on la supprime
+            // (comportement historique). wafy:prune purge les vieilles lignes.
+            if (!config('wafy.backoff_enabled', true)) {
+                $bannedIp->delete();
+            }
         }
 
         // No active ban -> remember the identity as clean for a short while.

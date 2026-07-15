@@ -3,10 +3,51 @@
 namespace Bdsa\Wafy\Concerns;
 
 use Symfony\Component\HttpFoundation\IpUtils;
+use Illuminate\Support\Facades\Lang;
 use Bdsa\Wafy\Support\BanKey;
 
 trait HandlesClientIp
 {
+    /**
+     * Resolve a configurable Wafy response message. The configured value may be
+     * a literal string (the historical default) OR a translation key: only when
+     * a matching lang line exists is it passed through trans(). $default is a
+     * hard fallback for configs published before this feature existed.
+     */
+    protected function wafyMessage(string $key, string $default): string
+    {
+        $value = (string) config('wafy.messages.' . $key, $default);
+
+        if ($value !== '' && Lang::has($value)) {
+            return (string) trans($value);
+        }
+
+        return $value;
+    }
+
+    /**
+     * Configurable HTTP status for a response site, falling back to the
+     * historical code when unset or implausible.
+     */
+    protected function wafyStatus(string $key, int $default): int
+    {
+        $status = (int) config('wafy.status_codes.' . $key, $default);
+
+        return ($status >= 100 && $status <= 599) ? $status : $default;
+    }
+
+    /**
+     * Build a JSON refusal response from a configurable message + status.
+     * Shared by both middlewares.
+     */
+    protected function wafyBlock(string $messageKey, string $defaultMessage, string $statusKey, int $defaultStatus)
+    {
+        return response()->json(
+            ['message' => $this->wafyMessage($messageKey, $defaultMessage)],
+            $this->wafyStatus($statusKey, $defaultStatus)
+        );
+    }
+
     /**
      * Canonical identity used to store / look up bans and strikes for an IP
      * (IPv4 unchanged; IPv6 collapsed to its configured network prefix).
@@ -83,6 +124,61 @@ trait HandlesClientIp
         }
 
         return IpUtils::checkIp($ip, array_values($allowed));
+    }
+
+    /**
+     * The bound GeoIP resolver (or the null resolver if unbound).
+     */
+    protected function geoIpResolver()
+    {
+        return app(\Bdsa\Wafy\Contracts\GeoIpResolver::class);
+    }
+
+    /**
+     * Return a deny reason if the client IP is blocked by GeoIP country/ASN
+     * policy, or null. Skipped for private/reserved IPs (same anti self-DoS
+     * invariant as velocity) and when GeoIP is disabled.
+     */
+    protected function geoDenyReason(?string $ip): ?string
+    {
+        if (!config('wafy.geoip.enabled', false)) {
+            return null;
+        }
+
+        if (empty($ip) || $this->isUnbannable($ip)) {
+            return null;
+        }
+
+        $resolver = $this->geoIpResolver();
+
+        // ASN deny list (cheap, checked first).
+        $denyAsns = array_map('intval', (array) config('wafy.geoip.deny_asns', []));
+        if (!empty($denyAsns)) {
+            $asn = $resolver->asn($ip);
+            if ($asn !== null && in_array((int) $asn, $denyAsns, true)) {
+                return "GeoIP: ASN {$asn} denied (hosting/VPN)";
+            }
+        }
+
+        // Country allow/deny list.
+        $countries = array_map('strtoupper', array_map('strval', (array) config('wafy.geoip.countries', [])));
+        if (!empty($countries)) {
+            $country = $resolver->country($ip); // null => unknown
+            $mode = config('wafy.geoip.mode', 'deny');
+
+            if ($mode === 'allow') {
+                // Block only a KNOWN country not in the allow-list (unknown passes).
+                if ($country !== null && !in_array($country, $countries, true)) {
+                    return "GeoIP: country {$country} not in allow-list";
+                }
+            } else {
+                if ($country !== null && in_array($country, $countries, true)) {
+                    return "GeoIP: country {$country} denied";
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
