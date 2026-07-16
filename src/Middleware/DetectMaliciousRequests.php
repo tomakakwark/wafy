@@ -35,19 +35,6 @@ class DetectMaliciousRequests
         // Check action mode (block vs log)
         $action = cache('wafy.action', config('wafy.action', 'block'));
 
-        // GeoIP country/ASN policy (opt-in). A deny either blocks/bans outright
-        // or contributes a score, depending on wafy.geoip.action.
-        $geoScore = 0;
-        $geoReason = $this->geoDenyReason($clientIp);
-        if ($geoReason !== null) {
-            $geoAction = config('wafy.geoip.action', 'block');
-            if ($geoAction === 'score') {
-                $geoScore = max(0, (int) config('wafy.geoip.score', 4));
-            } else {
-                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $geoReason, $geoAction === 'ban');
-            }
-        }
-
         // Fast early exit: if the IP is already under an ACTIVE ban, skip the
         // (relatively expensive) pattern matching. A cached "clean" marker lets
         // legitimate repeat traffic skip the DB lookup entirely. Expired bans
@@ -68,6 +55,20 @@ class DetectMaliciousRequests
                     return $this->wafyBlock('unavailable', 'Service temporairement indisponible.', 'unavailable', 503);
                 }
                 // fail-open: continue to pattern detection
+            }
+        }
+
+        // GeoIP country/ASN policy (opt-in). Evaluated AFTER the active-ban exit
+        // so an already-banned IP short-circuits first (no re-ban / offense
+        // inflation). A deny either blocks/bans outright or contributes a score.
+        $geoScore = 0;
+        $geoReason = $this->geoDenyReason($clientIp);
+        if ($geoReason !== null) {
+            $geoAction = config('wafy.geoip.action', 'block');
+            if ($geoAction === 'score') {
+                $geoScore = max(0, (int) config('wafy.geoip.score', 2));
+            } else {
+                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $geoReason, $geoAction === 'ban');
             }
         }
 
@@ -321,12 +322,18 @@ class DetectMaliciousRequests
 
         foreach ((array) config('wafy.rules', []) as $i => $rule) {
             if (is_string($rule)) {
-                $normalized[] = ['id' => 'rule_' . $i, 'score' => $this->scoreThreshold(), 'pattern' => $rule];
+                $normalized[] = ['id' => 'rule_' . $i, 'score' => $this->scoreThreshold(), 'pattern' => $rule, 'fields' => null];
             } elseif (is_array($rule) && !empty($rule['pattern'])) {
+                // Optional 'fields' scopes a rule to specific subjects (e.g. a
+                // User-Agent signature only matches the 'User-Agent' subject, not
+                // arbitrary body/query content that merely mentions a tool name).
+                $fields = isset($rule['fields']) ? (array) $rule['fields'] : null;
+
                 $normalized[] = [
                     'id' => (string) ($rule['id'] ?? 'rule_' . $i),
                     'score' => (int) ($rule['score'] ?? $this->scoreThreshold()),
                     'pattern' => $rule['pattern'],
+                    'fields' => $fields,
                 ];
             }
         }
@@ -363,6 +370,11 @@ class DetectMaliciousRequests
             foreach ($rules as $rule) {
                 if (isset($matchedRules[$rule['id']])) {
                     continue; // already counted this rule
+                }
+
+                // Field-scoped rules only apply to their declared subjects.
+                if (!empty($rule['fields']) && !in_array($fieldName, $rule['fields'], true)) {
+                    continue;
                 }
 
                 foreach ($variants as $variant) {
@@ -453,6 +465,7 @@ class DetectMaliciousRequests
         $maxFiles = max(0, (int) config('wafy.multipart.max_files', 20));
         $maxSize = max(0, (int) config('wafy.multipart.max_file_size', 1048576));
         $perFileCap = min($maxLen, max(0, (int) config('wafy.multipart.max_file_bytes', 8192)));
+        $scanContents = (bool) config('wafy.multipart.scan_file_contents', false);
 
         $subjects = [];
         $i = 0;
@@ -471,9 +484,12 @@ class DetectMaliciousRequests
                 $subjects['File#' . $i . '.name'] = $name;
             }
 
-            $content = $this->readUploadSlice($file, $perFileCap, $maxSize);
-            if ($content !== null && $content !== '') {
-                $subjects['File#' . $i . '.content'] = $content;
+            // Content scanning is opt-in (higher FP risk on legit code/SQL uploads).
+            if ($scanContents) {
+                $content = $this->readUploadSlice($file, $perFileCap, $maxSize);
+                if ($content !== null && $content !== '') {
+                    $subjects['File#' . $i . '.content'] = $content;
+                }
             }
 
             $i++;
@@ -646,9 +662,9 @@ class DetectMaliciousRequests
             return is_null($duration) ? null : now()->addMinutes((int) $duration);
         }
 
-        // Escalate to a permanent ban after N offenses (null/'' = never).
-        $escalate = config('wafy.escalate_to_permanent_after');
-        if ($escalate !== null && $escalate !== '' && $offenseCount >= (int) $escalate) {
+        // Escalate to a permanent ban after N offenses (null/''/0 = never).
+        $escalate = (int) config('wafy.escalate_to_permanent_after');
+        if ($escalate > 0 && $offenseCount >= $escalate) {
             return null;
         }
 

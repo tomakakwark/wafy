@@ -180,13 +180,16 @@ Default protection covers:
 - **Deserialization**: PHP (`O:8:"…":`), Java (`rO0AB…`), Python pickle opcodes.
 - **Also**: LDAP filter injection, prototype pollution (`__proto__`), CRLF header splitting, known **scanner user-agents** (sqlmap, nikto, nuclei…), and **honeypot trap paths**.
 
-Uploaded **file names and small text contents** are scanned too (multipart), and a
-`rawurldecode` variant is checked so `+`-bearing payloads aren't lost.
+Uploaded **file names** are scanned too (multipart); scanning file **contents** is
+opt-in (`multipart.scan_file_contents`, off by default to avoid FPs on legit
+code/SQL uploads). A `rawurldecode` variant is also checked so `+`-bearing
+payloads aren't lost.
 
 Several layers are **opt-in** (tune to your traffic before enabling): velocity
-`rate_limit`, `geoip` country/ASN filtering, `flag_empty_user_agent`, and the
-`bot.generic_http_client` UA rule. Repeat-offender **backoff** and **honeypot**
-paths are on by default. See `config/wafy.php` for every option.
+`rate_limit`, `geoip` country/ASN filtering, `multipart.scan_file_contents`,
+`flag_empty_user_agent`, and the `bot.generic_http_client` UA rule. Repeat-offender
+**backoff** and **honeypot** paths are on by default. Rules can be **field-scoped**
+(e.g. the scanner-UA rule only inspects `User-Agent`). See `config/wafy.php`.
 
 ### Detection scoring
 

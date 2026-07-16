@@ -63,6 +63,17 @@ class BackoffTest extends TestCase
     }
 
     /** @test */
+    public function escalate_to_permanent_after_zero_means_disabled()
+    {
+        config(['wafy.backoff_enabled' => true, 'wafy.backoff_base' => 5, 'wafy.escalate_to_permanent_after' => 0]);
+
+        $this->attack();
+
+        // 0 must NOT permanently ban on the first offense.
+        $this->assertNotNull(BannedIp::first()->banned_until);
+    }
+
+    /** @test */
     public function backoff_disabled_keeps_a_fixed_duration()
     {
         config(['wafy.backoff_enabled' => false, 'wafy.ban_duration' => 30]);

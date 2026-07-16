@@ -149,33 +149,40 @@ trait HandlesClientIp
             return null;
         }
 
-        $resolver = $this->geoIpResolver();
+        // A broken/mis-bound resolver must never take the app down: fault-isolate
+        // the whole lookup and skip geo on any error (fail-open, like the ban store).
+        try {
+            $resolver = $this->geoIpResolver();
 
-        // ASN deny list (cheap, checked first).
-        $denyAsns = array_map('intval', (array) config('wafy.geoip.deny_asns', []));
-        if (!empty($denyAsns)) {
-            $asn = $resolver->asn($ip);
-            if ($asn !== null && in_array((int) $asn, $denyAsns, true)) {
-                return "GeoIP: ASN {$asn} denied (hosting/VPN)";
-            }
-        }
-
-        // Country allow/deny list.
-        $countries = array_map('strtoupper', array_map('strval', (array) config('wafy.geoip.countries', [])));
-        if (!empty($countries)) {
-            $country = $resolver->country($ip); // null => unknown
-            $mode = config('wafy.geoip.mode', 'deny');
-
-            if ($mode === 'allow') {
-                // Block only a KNOWN country not in the allow-list (unknown passes).
-                if ($country !== null && !in_array($country, $countries, true)) {
-                    return "GeoIP: country {$country} not in allow-list";
-                }
-            } else {
-                if ($country !== null && in_array($country, $countries, true)) {
-                    return "GeoIP: country {$country} denied";
+            // ASN deny list (cheap, checked first).
+            $denyAsns = array_map('intval', (array) config('wafy.geoip.deny_asns', []));
+            if (!empty($denyAsns)) {
+                $asn = $resolver->asn($ip);
+                if ($asn !== null && in_array((int) $asn, $denyAsns, true)) {
+                    return "GeoIP: ASN {$asn} denied (hosting/VPN)";
                 }
             }
+
+            // Country allow/deny list.
+            $countries = array_map('strtoupper', array_map('strval', (array) config('wafy.geoip.countries', [])));
+            if (!empty($countries)) {
+                $country = $resolver->country($ip); // null => unknown
+                $mode = config('wafy.geoip.mode', 'deny');
+
+                if ($mode === 'allow') {
+                    // Block only a KNOWN country not in the allow-list (unknown passes).
+                    if ($country !== null && !in_array($country, $countries, true)) {
+                        return "GeoIP: country {$country} not in allow-list";
+                    }
+                } else {
+                    if ($country !== null && in_array($country, $countries, true)) {
+                        return "GeoIP: country {$country} denied";
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Wafy: GeoIP lookup failed for ' . $ip . ': ' . $e->getMessage());
+            return null;
         }
 
         return null;

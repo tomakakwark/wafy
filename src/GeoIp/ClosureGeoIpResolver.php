@@ -13,6 +13,9 @@ class ClosureGeoIpResolver implements GeoIpResolver
 {
     private $callback;
 
+    /** @var array{ip:?string,data:array}|null last resolved lookup (per-request memo) */
+    private $memo = null;
+
     public function __construct(Closure $callback)
     {
         $this->callback = $callback;
@@ -35,12 +38,20 @@ class ClosureGeoIpResolver implements GeoIpResolver
 
     private function resolve(?string $ip): array
     {
+        // Memoize the last IP so country() + asn() invoke the closure only once.
+        if ($this->memo !== null && $this->memo['ip'] === $ip) {
+            return $this->memo['data'];
+        }
+
         try {
             $result = ($this->callback)($ip);
-
-            return is_array($result) ? $result : [];
+            $data = is_array($result) ? $result : [];
         } catch (\Throwable $e) {
-            return [];
+            $data = [];
         }
+
+        $this->memo = ['ip' => $ip, 'data' => $data];
+
+        return $data;
     }
 }

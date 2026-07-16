@@ -64,9 +64,16 @@ class BlockBannedIp
             }
 
             // Ban temporaire expiré. En mode backoff, on GARDE la ligne pour que
-            // le compteur d'offenses survive (escalade) ; sinon on la supprime
-            // (comportement historique). wafy:prune purge les vieilles lignes.
-            if (!config('wafy.backoff_enabled', true)) {
+            // le compteur d'offenses survive (escalade) — mais seulement pendant
+            // la fenêtre de grâce backoff_reset_after ; passé ce délai on la
+            // supprime à l'accès (filet de nettoyage sans dépendre de wafy:prune).
+            // Hors backoff, suppression immédiate (comportement historique).
+            $resetAfter = (int) config('wafy.backoff_reset_after', 30);
+            $stale = $resetAfter > 0
+                && $bannedIp->updated_at !== null
+                && $bannedIp->updated_at->lessThan(now()->subDays($resetAfter));
+
+            if (!config('wafy.backoff_enabled', true) || $stale) {
                 $bannedIp->delete();
             }
         }

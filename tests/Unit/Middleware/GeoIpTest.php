@@ -107,6 +107,34 @@ class GeoIpTest extends TestCase
     }
 
     /** @test */
+    public function an_already_banned_ip_is_not_re_banned_by_geoip()
+    {
+        // GeoIP runs AFTER the active-ban exit, so a banned IP short-circuits
+        // without re-banning / inflating offense_count.
+        $this->fake(['8.8.8.8' => ['country' => 'RU']]);
+        config(['wafy.geoip.enabled' => true, 'wafy.geoip.countries' => ['RU'], 'wafy.geoip.action' => 'ban']);
+
+        \Bdsa\Wafy\Models\BannedIp::create(['ip_address' => '8.8.8.8', 'banned_until' => now()->addDay(), 'offense_count' => 1]);
+
+        $this->hit('8.8.8.8')->assertStatus(403);
+
+        $this->assertSame(1, \Bdsa\Wafy\Models\BannedIp::firstWhere('ip_address', '8.8.8.8')->offense_count);
+    }
+
+    /** @test */
+    public function a_failing_resolver_does_not_500_the_request()
+    {
+        // A resolver that throws must fail-open (skip geo), not crash the app.
+        $this->app->instance(GeoIpResolver::class, new class implements GeoIpResolver {
+            public function country(?string $ip): ?string { throw new \RuntimeException('boom'); }
+            public function asn(?string $ip): ?int { throw new \RuntimeException('boom'); }
+        });
+        config(['wafy.geoip.enabled' => true, 'wafy.geoip.countries' => ['RU']]);
+
+        $this->hit('8.8.8.8')->assertStatus(200)->assertSee('Safe');
+    }
+
+    /** @test */
     public function it_obeys_log_mode()
     {
         $this->fake(['8.8.8.8' => ['country' => 'RU']]);
