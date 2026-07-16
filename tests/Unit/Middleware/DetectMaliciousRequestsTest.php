@@ -323,6 +323,15 @@ class DetectMaliciousRequestsTest extends TestCase
     }
 
     /** @test */
+    public function a_scanner_name_in_the_body_does_not_trigger_the_ua_rule()
+    {
+        // bot.scanner_ua is scoped to the User-Agent subject: a forum post or
+        // comment mentioning a tool name must NOT block/ban the author.
+        $this->postJson('/test-waf', ['comment' => 'I ran sqlmap and nikto against my own test box'])
+            ->assertStatus(200);
+    }
+
+    /** @test */
     public function empty_user_agent_only_corroborates_when_enabled()
     {
         // A single medium SQL signal (score 3) is below the threshold on its own.
@@ -337,12 +346,24 @@ class DetectMaliciousRequestsTest extends TestCase
     }
 
     /** @test */
-    public function it_scans_uploaded_file_content()
+    public function it_scans_uploaded_file_content_when_enabled()
     {
+        config(['wafy.multipart.scan_file_contents' => true]); // opt-in
+
         $malicious = \Illuminate\Http\UploadedFile::fake()
             ->createWithContent('notes.txt', "1' UNION SELECT password FROM users-- -");
 
         $this->post('/test-waf', ['upload' => $malicious])->assertStatus(403);
+    }
+
+    /** @test */
+    public function it_does_not_scan_file_content_by_default()
+    {
+        // Content scanning is opt-in; a malicious .sql/code upload passes by default.
+        $malicious = \Illuminate\Http\UploadedFile::fake()
+            ->createWithContent('backup.sql', "1' UNION SELECT password FROM users-- -");
+
+        $this->post('/test-waf', ['upload' => $malicious])->assertStatus(200);
     }
 
     /** @test */

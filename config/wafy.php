@@ -127,12 +127,14 @@ return [
 
     /*
     | Uploads multipart : le corps brut (getContent) est vide en multipart, donc
-    | les fichiers échappent au scan. On inspecte le NOM (toujours) et une tranche
-    | texte bornée des petits uploads. scan_files=false si votre app accepte
-    | légitimement du code/SQL/HTML uploadé (sinon faux positifs possibles).
+    | les fichiers échappent au scan. scan_files inspecte le NOM des fichiers
+    | (faible risque de FP, activé). scan_file_contents lit en plus une tranche
+    | texte bornée du contenu — DÉSACTIVÉ par défaut car il peut faux-positiver
+    | sur des uploads légitimes de code/SQL/HTML ; activez-le en connaissance.
     */
     'multipart' => [
         'scan_files' => (bool) env('WAFY_MULTIPART_SCAN_FILES', true),
+        'scan_file_contents' => (bool) env('WAFY_MULTIPART_SCAN_CONTENTS', false),
         'max_files' => (int) env('WAFY_MULTIPART_MAX_FILES', 20),
         'max_file_size' => (int) env('WAFY_MULTIPART_MAX_FILE_SIZE', 1048576), // octets ; au-dessus = non lu
         'max_file_bytes' => (int) env('WAFY_MULTIPART_MAX_FILE_BYTES', 8192),  // octets scannés / fichier
@@ -230,7 +232,7 @@ return [
         'countries' => [], // ex. ['RU', 'CN', 'KP'] (deny) ou ['FR', 'BE'] (allow)
         'deny_asns' => [], // ex. [14061, 16509] (hébergeurs/VPN)
         'action' => env('WAFY_GEOIP_ACTION', 'block'), // 'block' | 'ban' | 'score'
-        'score' => (int) env('WAFY_GEOIP_SCORE', 4),
+        'score' => (int) env('WAFY_GEOIP_SCORE', 2), // < score_threshold => needs corroboration
         'resolver' => null, // Closure|string|null
         'database' => env('WAFY_GEOIP_DB', ''),     // chemin base MaxMind pays
         'asn_database' => env('WAFY_GEOIP_ASN_DB', ''), // chemin base MaxMind ASN
@@ -390,7 +392,7 @@ return [
         // (nuclei = pluriel de nucleus) ; nmap sur « nmap scripting engine » ;
         // curl/python-requests/httpx/hydra VOLONTAIREMENT absents (double usage /
         // mots courants — couverts par la vélocité et les règles de charge).
-        ['id' => 'bot.scanner_ua',       'score' => 5, 'pattern' => '/(\bsqlmap\b|\bnikto\b|\bacunetix\b|\bnetsparker\b|\binvicti\b|\bnessus\b|\bopenvas\b|\barachni\b|\bw3af\b|\bskipfish\b|\bwpscan\b|\bjoomscan\b|\bdroopescan\b|\bwhatweb\b|\bwfuzz\b|\bffuf\b|\bdirbuster\b|\bgobuster\b|\bferoxbuster\b|\bdirsearch\b|\bmasscan\b|\bzgrab\b|\bfimap\b|\bhavij\b|\bjbrofuzz\b|nuclei\/|projectdiscovery|nmap scripting engine)/i'],
+        ['id' => 'bot.scanner_ua', 'score' => 5, 'fields' => ['User-Agent'], 'pattern' => '/(\bsqlmap\b|\bnikto\b|\bacunetix\b|\bnetsparker\b|\binvicti\b|\bnessus\b|\bopenvas\b|\barachni\b|\bw3af\b|\bskipfish\b|\bwpscan\b|\bjoomscan\b|\bdroopescan\b|\bwhatweb\b|\bwfuzz\b|\bffuf\b|\bdirbuster\b|\bgobuster\b|\bferoxbuster\b|\bdirsearch\b|\bmasscan\b|\bzgrab\b|\bfimap\b|\bhavij\b|\bjbrofuzz\b|nuclei\/|projectdiscovery|nmap scripting engine)/i'],
         // OPTIONNEL — clients HTTP génériques (double usage). Score 1 (indice seul,
         // ne bloque jamais). Décommentez et validez contre VOTRE trafic.
         // ['id' => 'bot.generic_http_client', 'score' => 1, 'pattern' => '/(\bpython-requests\/|\blibwww-perl\/|\bGo-http-client\/|\bWget\/|\bcurl\/)/i'],
