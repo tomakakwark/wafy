@@ -4,10 +4,102 @@ namespace Bdsa\Wafy\Concerns;
 
 use Symfony\Component\HttpFoundation\IpUtils;
 use Illuminate\Support\Facades\Lang;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Http\Request;
 use Bdsa\Wafy\Support\BanKey;
+use Bdsa\Wafy\Models\WafyEvent;
 
 trait HandlesClientIp
 {
+    /**
+     * Emit a STRUCTURED Wafy log line on the configured channel. The stable,
+     * SIEM-parsable schema is attached as CONTEXT; NEVER pass attacker values
+     * here — only rule ids, field names and the path.
+     */
+    protected function wafyLog(string $level, string $event, array $context = []): void
+    {
+        if (!config('wafy.logging.enabled', true)) {
+            return;
+        }
+
+        $payload = array_merge(['wafy' => true, 'schema' => 1, 'event' => $event], $context);
+        $reason = isset($context['reason']) && $context['reason'] !== '' ? $context['reason'] : $event;
+        $message = 'Wafy: ' . $reason;
+
+        try {
+            $channel = config('wafy.logging.channel');
+            if ($channel !== null && $channel !== '') {
+                Log::channel($channel)->log($level, $message, $payload);
+            } else {
+                Log::log($level, $message, $payload);
+            }
+        } catch (\Throwable $e) {
+            // A mis-configured channel must never break the request or hide the
+            // security event: fall back to the default channel.
+            try {
+                Log::log($level, $message, $payload);
+            } catch (\Throwable $e2) {
+                // give up silently
+            }
+        }
+    }
+
+    /** Base structured context from the request. Path ONLY — never the query/values. */
+    protected function wafyRequestContext(Request $request, ?string $ip = null, ?string $identity = null): array
+    {
+        $ip = $ip ?? $request->ip();
+
+        return [
+            'ip' => $ip,
+            'identity' => $identity ?? $this->banIdentity($ip),
+            'path' => '/' . ltrim($request->path(), '/'),
+            'method' => $request->method(),
+        ];
+    }
+
+    /**
+     * Append a telemetry event for wafy:stats. Opt-in (wafy.stats.enabled) and
+     * fully failure-isolated: a stats write must NEVER break the request.
+     */
+    protected function recordEvent(Request $request, string $identity, string $event, array $ruleIds, int $score): void
+    {
+        if (!config('wafy.stats.enabled', false)) {
+            return; // one read, then out — no DB touched when off
+        }
+
+        try {
+            $path = '/' . ltrim($request->path(), '/');
+            if (strlen($path) > 512) {
+                $path = substr($path, 0, 512);
+            }
+
+            WafyEvent::create([
+                'ip_identity' => $identity,
+                'event' => $event,
+                'rule_ids' => array_values(array_slice(array_map('strval', $ruleIds), 0, 30)),
+                'score' => max(0, min(65535, $score)),
+                'path' => $path,
+                'country' => $this->statsCountry($request->ip()),
+                'created_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Wafy: stats event write failed: ' . $e->getMessage());
+        }
+    }
+
+    private function statsCountry(?string $ip): ?string
+    {
+        if (empty($ip) || !config('wafy.stats.geo', true)) {
+            return null;
+        }
+
+        try {
+            $c = $this->geoIpResolver()->country($ip);
+            return $c !== null ? strtoupper(substr((string) $c, 0, 2)) : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
     /**
      * Resolve a configurable Wafy response message. The configured value may be
      * a literal string (the historical default) OR a translation key: only when
@@ -37,15 +129,62 @@ trait HandlesClientIp
     }
 
     /**
-     * Build a JSON refusal response from a configurable message + status.
-     * Shared by both middlewares.
+     * Build a refusal response from a configurable message + status, honouring
+     * wafy.response.mode (json | view | auto) and an optional bounded tarpit.
+     * Shared by both middlewares. $tarpitEligible MUST be false for the
+     * fail-open 503 so we never pin a PHP-FPM worker while the store is degraded.
      */
-    protected function wafyBlock(string $messageKey, string $defaultMessage, string $statusKey, int $defaultStatus)
+    protected function wafyBlock(string $messageKey, string $defaultMessage, string $statusKey, int $defaultStatus, bool $tarpitEligible = true)
     {
-        return response()->json(
-            ['message' => $this->wafyMessage($messageKey, $defaultMessage)],
-            $this->wafyStatus($statusKey, $defaultStatus)
-        );
+        $message = $this->wafyMessage($messageKey, $defaultMessage);
+        $status = $this->wafyStatus($statusKey, $defaultStatus);
+
+        if ($tarpitEligible) {
+            $this->wafyTarpit();
+        }
+
+        return $this->wafyResponse($message, $status);
+    }
+
+    /**
+     * Bounded delay to slow scanners. Default 0 (disabled, BC). Clamped to
+     * [0, tarpit_max]. WARNING: sleep() pins a PHP-FPM worker for its duration.
+     */
+    protected function wafyTarpit(): void
+    {
+        $max = max(0, (int) config('wafy.response.tarpit_max', 5));
+        $seconds = max(0, min((int) config('wafy.response.tarpit_seconds', 0), $max));
+
+        if ($seconds > 0) {
+            sleep($seconds);
+        }
+    }
+
+    /**
+     * Render the refusal body per wafy.response.mode. Falls back to JSON when
+     * the view is missing so a block can never 500.
+     */
+    protected function wafyResponse(string $message, int $status)
+    {
+        $mode = (string) config('wafy.response.mode', 'json');
+
+        if ($mode === 'view' || $mode === 'auto') {
+            $wantsJson = false;
+            if ($mode === 'auto') {
+                $request = request();
+                $wantsJson = $request !== null && ($request->expectsJson() || $request->wantsJson());
+            }
+
+            if (!$wantsJson) {
+                $view = (string) config('wafy.response.view', 'wafy::blocked');
+                if (\Illuminate\Support\Facades\View::exists($view)) {
+                    return response()->view($view, ['message' => $message, 'status' => $status], $status);
+                }
+                // View missing: degrade to JSON rather than 500.
+            }
+        }
+
+        return response()->json(['message' => $message], $status);
     }
 
     /**

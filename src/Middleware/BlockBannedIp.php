@@ -40,7 +40,7 @@ class BlockBannedIp
         } catch (\Throwable $e) {
             Log::error("Wafy: ban lookup failed for {$clientIp}: " . $e->getMessage());
             if (!config('wafy.fail_open', true)) {
-                return $this->wafyBlock('unavailable', 'Service temporairement indisponible.', 'unavailable', 503);
+                return $this->wafyBlock('unavailable', 'Service temporairement indisponible.', 'unavailable', 503, false);
             }
             return $next($request);
         }

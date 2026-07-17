@@ -52,7 +52,7 @@ class DetectMaliciousRequests
             } catch (\Throwable $e) {
                 Log::error("Wafy: ban lookup failed for {$clientIp}: " . $e->getMessage());
                 if (!config('wafy.fail_open', true)) {
-                    return $this->wafyBlock('unavailable', 'Service temporairement indisponible.', 'unavailable', 503);
+                    return $this->wafyBlock('unavailable', 'Service temporairement indisponible.', 'unavailable', 503, false);
                 }
                 // fail-open: continue to pattern detection
             }
@@ -68,7 +68,7 @@ class DetectMaliciousRequests
             if ($geoAction === 'score') {
                 $geoScore = max(0, (int) config('wafy.geoip.score', 2));
             } else {
-                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $geoReason, $geoAction === 'ban');
+                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $geoReason, $geoAction === 'ban', ['rules' => ['geoip'], 'fields' => ['GeoIP']]);
             }
         }
 
@@ -85,7 +85,8 @@ class DetectMaliciousRequests
                 $identity,
                 $action,
                 $trap,
-                (bool) config('wafy.honeypot_ban', true)
+                (bool) config('wafy.honeypot_ban', true),
+                ['rules' => ['honeypot'], 'fields' => ['Path']]
             );
         }
 
@@ -99,7 +100,7 @@ class DetectMaliciousRequests
         if ($rateApplies) {
             $breach = $this->velocityBreach($identity);
             if ($breach !== null) {
-                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $breach, true);
+                return $this->actOnDetection($request, $next, $clientIp, $identity, $action, $breach, true, ['rules' => ['velocity']]);
             }
         }
 
@@ -146,7 +147,14 @@ class DetectMaliciousRequests
                 $identity,
                 $action,
                 $summary,
-                $result['score'] >= $this->banScoreThreshold()
+                $result['score'] >= $this->banScoreThreshold(),
+                [
+                    'score' => $result['score'],
+                    'threshold' => $threshold,
+                    'rules' => $result['rules'],
+                    'fields' => $result['fields'],
+                    'severity' => $result['severity'],
+                ]
             );
         }
 
@@ -209,13 +217,20 @@ class DetectMaliciousRequests
     /**
      * Apply the block/log/ban decision shared by pattern and velocity detection.
      */
-    private function actOnDetection(Request $request, Closure $next, string $clientIp, string $identity, string $action, string $summary, bool $banEligible)
+    private function actOnDetection(Request $request, Closure $next, string $clientIp, string $identity, string $action, string $summary, bool $banEligible, array $meta = [])
     {
-        Log::warning("Wafy: {$summary} from {$clientIp}");
+        $ctx = array_merge(
+            $this->wafyRequestContext($request, $clientIp, $identity),
+            ['action' => $action, 'reason' => $summary],
+            $meta
+        );
+        $ruleIds = isset($meta['rules']) ? (array) $meta['rules'] : [];
+        $score = isset($meta['score']) ? (int) $meta['score'] : 0;
 
         // In Log-Only mode we record the hit but never block or ban.
         if ($action === 'log') {
-            Log::info("Wafy (Log-Only): request allowed for {$clientIp} despite: {$summary}");
+            $this->wafyLog('info', 'log_only', array_merge($ctx, ['decision' => 'allowed']));
+            $this->recordEvent($request, $identity, 'logged', $ruleIds, $score);
             return $next($request);
         }
 
@@ -224,14 +239,22 @@ class DetectMaliciousRequests
             // allowed: such an address almost always means TrustProxies is
             // misconfigured and we would ban our own proxy/CDN. Still blocked.
             if ($this->isUnbannable($clientIp) && !config('wafy.ban_private_ips', false)) {
-                Log::warning("Wafy: {$summary} from private/reserved IP {$clientIp} — ban skipped (check TrustProxies).");
-            } elseif ($this->registerStrike($identity)) {
+                $this->wafyLog('warning', 'ban_skipped', array_merge($ctx, ['decision' => 'ban_skipped']));
+                $this->recordEvent($request, $identity, 'blocked', $ruleIds, $score);
+
+                return $this->wafyBlock('blocked', 'Requête bloquée.', 'blocked', 403);
+            }
+            if ($this->registerStrike($identity)) {
                 // Strike threshold reached -> persistent ban.
-                $this->banIp($request, $clientIp, $summary);
+                $this->banIp($request, $clientIp, $summary, $ctx);
+                $this->recordEvent($request, $identity, 'banned', $ruleIds, $score);
 
                 return $this->wafyBlock('banned', 'Votre IP est bannie.', 'banned', 403);
             }
         }
+
+        $this->wafyLog('warning', 'detection', array_merge($ctx, ['decision' => 'blocked']));
+        $this->recordEvent($request, $identity, 'blocked', $ruleIds, $score);
 
         return $this->wafyBlock('blocked', 'Requête bloquée.', 'blocked', 403);
     }
@@ -770,7 +793,7 @@ class DetectMaliciousRequests
     /**
      * Persist the ban and fire notifications, redacting sensitive input.
      */
-    private function banIp(Request $request, string $ip, string $reason): void
+    private function banIp(Request $request, string $ip, string $reason, array $ctx = []): void
     {
         $identity = $this->banIdentity($ip);
 
@@ -808,6 +831,12 @@ class DetectMaliciousRequests
 
         // The identity now has an active ban -> drop any cached "clean" marker.
         $this->forgetClean($identity);
+
+        $this->wafyLog('warning', 'ban_created', array_merge($ctx, [
+            'decision' => 'banned',
+            'offense_count' => $offenseCount,
+            'banned_until' => $bannedUntil ? $bannedUntil->toIso8601String() : null,
+        ]));
 
         if (config('wafy.notifications.enabled')) {
             try {

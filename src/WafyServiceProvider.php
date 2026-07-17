@@ -15,6 +15,7 @@ class WafyServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__ . '/../database/migrations/create_banned_ips_table.php' => database_path('migrations/' . date('Y_m_d_His') . '_create_banned_ips_table.php'),
             __DIR__ . '/../database/migrations/add_offense_count_to_wafy_banned_ips_table.php' => database_path('migrations/' . date('Y_m_d_His', time() + 1) . '_add_offense_count_to_wafy_banned_ips_table.php'),
+            __DIR__ . '/../database/migrations/create_wafy_events_table.php' => database_path('migrations/' . date('Y_m_d_His', time() + 2) . '_create_wafy_events_table.php'),
             __DIR__ . '/../config/wafy.php' => config_path('wafy.php'),
             __DIR__ . '/../lang' => function_exists('lang_path') ? lang_path('vendor/wafy') : resource_path('lang/vendor/wafy'),
         ]);
@@ -43,6 +44,7 @@ class WafyServiceProvider extends ServiceProvider
                 \Bdsa\Wafy\Console\PruneBans::class ,
                 \Bdsa\Wafy\Console\ManageRules::class ,
                 \Bdsa\Wafy\Console\ImportRules::class ,
+                \Bdsa\Wafy\Console\StatsReport::class ,
             ]);
         }
     }

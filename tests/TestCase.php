@@ -38,5 +38,8 @@ class TestCase extends Orchestra
         // Exécuter les migrations du package
         $migration = include __DIR__ . '/../database/migrations/create_banned_ips_table.php';
         $migration->up();
+
+        $events = include __DIR__ . '/../database/migrations/create_wafy_events_table.php';
+        $events->up();
     }
 }
