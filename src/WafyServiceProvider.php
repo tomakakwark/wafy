@@ -41,6 +41,8 @@ class WafyServiceProvider extends ServiceProvider
                 \Bdsa\Wafy\Console\SetAction::class ,
                 \Bdsa\Wafy\Console\TestNotification::class ,
                 \Bdsa\Wafy\Console\PruneBans::class ,
+                \Bdsa\Wafy\Console\ManageRules::class ,
+                \Bdsa\Wafy\Console\ImportRules::class ,
             ]);
         }
     }
