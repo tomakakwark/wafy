@@ -272,6 +272,16 @@ return [
     'score_threshold' => (int) env('WAFY_SCORE_THRESHOLD', 4),
 
     /*
+    | Packs de règles fournis (dans resources/rules/*.php), fusionnés au ruleset
+    | actif. Ex. ['owasp-crs'] pour le pack inspiré de l'OWASP CRS (scores
+    | conservateurs). En cas de collision d'id, wafy.rules l'emporte.
+    | imported_rules_path : fichier généré par `wafy:rules:import` (défaut :
+    | storage/app/wafy/imported-rules.php), chargé automatiquement s'il existe.
+    */
+    'rule_packs' => array_filter(array_map('trim', explode(',', (string) env('WAFY_RULE_PACKS', '')))),
+    'imported_rules_path' => env('WAFY_IMPORTED_RULES_PATH', null),
+
+    /*
     | ban_score_threshold : score à partir duquel une requête (déjà bloquée)
     |   devient ÉLIGIBLE à un bannissement persistant — l'escalade réelle restant
     |   gouvernée par `ban_threshold` (nombre de strikes). Par défaut égal à

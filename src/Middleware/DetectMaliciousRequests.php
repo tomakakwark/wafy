@@ -127,11 +127,12 @@ class DetectMaliciousRequests
 
         if ($result['score'] >= $threshold) {
             $summary = sprintf(
-                'WAF score %d/%d in %s (rules: %s)%s',
+                'WAF score %d/%d in %s (rules: %s)%s%s',
                 $result['score'],
                 $threshold,
                 implode(',', $result['fields']),
                 implode(', ', $result['rules']),
+                isset($result['severity']) && $result['severity'] !== null ? ' | severity: ' . $result['severity'] : '',
                 $geoScore > 0 && $geoReason !== null ? ' | ' . $geoReason : ''
             );
 
@@ -318,35 +319,200 @@ class DetectMaliciousRequests
      */
     private function loadRules(): array
     {
-        $normalized = [];
+        $disabled = $this->disabledRuleIds(); // one cache get (runtime disable set)
 
+        $out = [];
+        foreach ($this->collectRules() as $id => $rule) {
+            // Drop: score <= 0 (an operator can neutralise a pack rule by
+            // re-declaring its id with score 0), static enabled=false, or a
+            // runtime-disabled id (wafy:rule disable).
+            if ($rule['score'] <= 0 || $rule['enabled'] === false || isset($disabled[$id])) {
+                continue;
+            }
+            $out[] = $rule;
+        }
+
+        return $out;
+    }
+
+    /**
+     * All merged detection rules keyed by id, BEFORE the runtime-disable/score
+     * filtering. Merge order (later overrides earlier on id collision): bundled
+     * packs < imported-rules file < wafy.rules (operator config always wins).
+     */
+    private function collectRules(): array
+    {
+        $byId = [];
+        foreach ($this->packRules() as $rule) {
+            $byId[$rule['id']] = $rule;
+        }
+        foreach ($this->importedRules() as $rule) {
+            $byId[$rule['id']] = $rule;
+        }
         foreach ((array) config('wafy.rules', []) as $i => $rule) {
-            if (is_string($rule)) {
-                $normalized[] = ['id' => 'rule_' . $i, 'score' => $this->scoreThreshold(), 'pattern' => $rule, 'fields' => null];
-            } elseif (is_array($rule) && !empty($rule['pattern'])) {
-                // Optional 'fields' scopes a rule to specific subjects (e.g. a
-                // User-Agent signature only matches the 'User-Agent' subject, not
-                // arbitrary body/query content that merely mentions a tool name).
-                $fields = isset($rule['fields']) ? (array) $rule['fields'] : null;
-
-                $normalized[] = [
-                    'id' => (string) ($rule['id'] ?? 'rule_' . $i),
-                    'score' => (int) ($rule['score'] ?? $this->scoreThreshold()),
-                    'pattern' => $rule['pattern'],
-                    'fields' => $fields,
-                ];
+            $norm = $this->normalizeRule($rule, 'rule_' . $i);
+            if ($norm !== null) {
+                $byId[$norm['id']] = $norm;
             }
         }
 
-        if (!empty($normalized)) {
-            return $normalized;
+        // Legacy flat patterns fallback (only when nothing above loaded).
+        if (empty($byId)) {
+            foreach ((array) config('wafy.patterns', []) as $i => $pattern) {
+                $id = 'legacy_' . $i;
+                $byId[$id] = ['id' => $id, 'score' => $this->scoreThreshold(), 'pattern' => $pattern, 'fields' => null, 'severity' => null, 'enabled' => true];
+            }
         }
 
-        foreach ((array) config('wafy.patterns', []) as $i => $pattern) {
-            $normalized[] = ['id' => 'legacy_' . $i, 'score' => $this->scoreThreshold(), 'pattern' => $pattern];
+        return $byId;
+    }
+
+    /**
+     * Public rule metadata for the wafy:rule console command (id => score,
+     * severity, static-disabled state) — derives ids exactly like loadRules().
+     */
+    public function rulesMetadata(): array
+    {
+        $meta = [];
+        foreach ($this->collectRules() as $id => $rule) {
+            $meta[$id] = [
+                'score' => $rule['score'],
+                'severity' => $rule['severity'],
+                'static_disabled' => ($rule['enabled'] === false),
+            ];
         }
 
-        return $normalized;
+        return $meta;
+    }
+
+    /** Allowed severities, weakest -> strongest (index = rank). */
+    private static $severities = ['info', 'low', 'medium', 'high', 'critical'];
+
+    /**
+     * Normalise one configured rule (string or array) into the internal shape.
+     * Returns null for a malformed entry (ignored, never fatal).
+     */
+    private function normalizeRule($rule, string $fallbackId): ?array
+    {
+        if (is_string($rule)) {
+            return ['id' => $fallbackId, 'score' => $this->scoreThreshold(), 'pattern' => $rule, 'fields' => null, 'severity' => null, 'enabled' => true];
+        }
+
+        if (is_array($rule) && !empty($rule['pattern'])) {
+            $severity = isset($rule['severity']) ? strtolower((string) $rule['severity']) : null;
+            if ($severity !== null && !in_array($severity, self::$severities, true)) {
+                $severity = null; // unknown severity => informational none
+            }
+
+            return [
+                'id' => (string) ($rule['id'] ?? $fallbackId),
+                'score' => (int) ($rule['score'] ?? $this->scoreThreshold()),
+                'pattern' => $rule['pattern'],
+                'fields' => isset($rule['fields']) ? (array) $rule['fields'] : null,
+                'severity' => $severity,
+                'enabled' => !(isset($rule['enabled']) && $rule['enabled'] === false),
+            ];
+        }
+
+        return null;
+    }
+
+    /** Runtime-disabled rule ids as an O(1) lookup map (id => true). */
+    private function disabledRuleIds(): array
+    {
+        $ids = cache()->get(\Bdsa\Wafy\Console\ManageRules::CACHE_KEY, []);
+
+        if (!is_array($ids) || empty($ids)) {
+            return [];
+        }
+
+        return array_flip(array_map('strval', array_values($ids)));
+    }
+
+    /** Numeric rank of a severity string (0 = unset/unknown). */
+    private function severityRank(?string $severity): int
+    {
+        if ($severity === null) {
+            return 0;
+        }
+        $i = array_search($severity, self::$severities, true);
+
+        return $i === false ? 0 : $i + 1;
+    }
+
+    /** Rules from the enabled bundled packs (wafy.rule_packs). */
+    private function packRules(): array
+    {
+        $out = [];
+        foreach (array_filter((array) config('wafy.rule_packs', []), 'is_string') as $pack) {
+            $path = $this->resolvePackPath($pack);
+            foreach ($this->readRuleFile($path) as $i => $rule) {
+                $norm = $this->normalizeRule($rule, $pack . '_' . $i);
+                if ($norm !== null) {
+                    $out[] = $norm;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    private function resolvePackPath(string $pack): ?string
+    {
+        if (substr($pack, -4) === '.php' && is_file($pack)) {
+            return $pack; // absolute file path
+        }
+        if (!preg_match('/^[A-Za-z0-9._-]+$/', $pack)) {
+            return null; // no path traversal
+        }
+        $path = __DIR__ . '/../../resources/rules/' . $pack . '.php';
+
+        return is_file($path) ? $path : null;
+    }
+
+    /** Rules from the wafy:rules:import output file, if any. */
+    private function importedRules(): array
+    {
+        $path = $this->importedRulesPath();
+        if ($path === null || !is_file($path)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($this->readRuleFile($path) as $i => $rule) {
+            $norm = $this->normalizeRule($rule, 'imported_' . $i);
+            if ($norm !== null) {
+                $out[] = $norm;
+            }
+        }
+
+        return $out;
+    }
+
+    private function importedRulesPath(): ?string
+    {
+        $configured = config('wafy.imported_rules_path');
+        if (is_string($configured) && $configured !== '') {
+            return $configured;
+        }
+
+        return function_exists('storage_path') ? storage_path('app/wafy/imported-rules.php') : null;
+    }
+
+    private function readRuleFile(?string $path): array
+    {
+        if ($path === null) {
+            return [];
+        }
+
+        try {
+            $data = require $path; // file just returns an array
+        } catch (\Throwable $e) {
+            Log::warning('Wafy: rule file load failed ' . $path . ': ' . $e->getMessage());
+            return [];
+        }
+
+        return is_array($data) ? $data : [];
     }
 
     /**
@@ -363,6 +529,7 @@ class DetectMaliciousRequests
         $score = 0;
         $matchedRules = [];
         $matchedFields = [];
+        $topSeverity = null;
 
         foreach ($subjects as $fieldName => $value) {
             $variants = $this->recursiveUrldecode($value);
@@ -382,6 +549,12 @@ class DetectMaliciousRequests
                         $matchedRules[$rule['id']] = true;
                         $matchedFields[$fieldName] = true;
                         $score += $rule['score'];
+
+                        $sev = isset($rule['severity']) ? $rule['severity'] : null;
+                        if ($this->severityRank($sev) > $this->severityRank($topSeverity)) {
+                            $topSeverity = $sev;
+                        }
+
                         break; // count each rule at most once per field
                     }
                 }
@@ -392,6 +565,7 @@ class DetectMaliciousRequests
             'score' => $score,
             'rules' => array_keys($matchedRules),
             'fields' => array_keys($matchedFields),
+            'severity' => $topSeverity,
         ];
     }
 
