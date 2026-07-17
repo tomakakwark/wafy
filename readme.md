@@ -165,6 +165,35 @@ middleware so that `$request->ip()` returns the real client IP.
 Also add your proxy / CDN ranges and any critical infrastructure to
 `wafy.allowed_ips` (CIDR ranges are supported) so they can never be banned.
 
+## ✅ Production checklist
+
+Wafy ships **safe by default** — every high-risk feature is off, `ban_threshold`
+is `3`, private/proxy IPs are never banned, and the ban store fails open. Three
+environment-level settings are the operator's responsibility and unlock its full
+value:
+
+1. **Trust your proxies.** Behind Nginx/Cloudflare/ALB, configure Laravel's
+   `TrustProxies` so `$request->ip()` is the real client IP (see the section
+   above). Add proxy/CDN ranges to `wafy.allowed_ips`.
+2. **Use a shared, persistent cache** (`redis`, `database`, or `file`). Strike
+   counting, runtime toggles (`wafy:mode`/`action`/`rule`), velocity and stats
+   dedup all rely on it. With the `array`/`null` driver Wafy logs a warning and
+   these silently no-op.
+3. **Schedule pruning** for expired bans + GDPR/stats retention:
+   ```php
+   // app/Console/Kernel.php
+   $schedule->command('wafy:prune')->daily();
+   ```
+
+Optional hardening to enable **after tuning to your traffic** (all off by default):
+`rate_limit` (velocity/scanner detection), `geoip` (country/ASN filtering),
+`rule_packs => ['owasp-crs']`, `flag_empty_user_agent`, `multipart.scan_file_contents`,
+`stats.enabled` (telemetry for `wafy:stats`), and `response.tarpit_seconds`
+(⚠ bounded — a tarpit sleep pins a PHP-FPM worker).
+
+Verify your notification wiring with `php artisan wafy:test-notification`, and
+review active rules with `php artisan wafy:rule list`.
+
 ## Configuration
 
 The configuration file is located at `config/wafy.php`. Besides the detection
