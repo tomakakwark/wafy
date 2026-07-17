@@ -400,7 +400,9 @@ return [
         // === Server-Side Template Injection (SSTI) ===
         // Sonde/gadget dans une expression {{ … }} (Twig/Jinja/Blade). Score moyen :
         // « {{7*7}} » collé dans un tuto ne bannit pas seul.
-        ['id' => 'ssti.probe',           'score' => 3, 'pattern' => '/\{\{[^}]{0,120}(7\s*\*\s*7|_self\b|__class__|__globals__|__mro__|__subclasses__|self\.env|\bcycler\b|\blipsum\b|request\.application|config\.items|getRuntime|\bsystem\s*\(|\bexec\s*\(|\bpopen\s*\(|subprocess)/i'],
+        // [^{}] (au lieu de [^}]) borne le scan à un seul niveau d'accolades :
+        // évite un backtracking quadratique sur une entrée « {{{{… » (anti-ReDoS).
+        ['id' => 'ssti.probe',           'score' => 3, 'pattern' => '/\{\{[^{}]{0,80}(7\s*\*\s*7|_self\b|__class__|__globals__|__mro__|__subclasses__|self\.env|\bcycler\b|\blipsum\b|request\.application|config\.items|getRuntime|\bsystem\s*\(|\bexec\s*\(|\bpopen\s*\(|subprocess)/i'],
         // Expression language / Freemarker RCE : ${T(java.lang.Runtime)…}, #{…}.
         ['id' => 'ssti.expr_lang',       'score' => 4, 'pattern' => '/(\$\{|#\{)[^}]{0,150}(T\s*\(|getRuntime|java\.lang|Runtime\.|ProcessBuilder|freemarker\.|\.execute\s*\(|new\s+Process|javax\.script)/i'],
 
