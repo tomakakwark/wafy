@@ -275,6 +275,9 @@ return [
         'enabled' => (bool) env('WAFY_STATS_ENABLED', false),
         'geo' => (bool) env('WAFY_STATS_GEO', true),
         'retention_days' => (int) env('WAFY_STATS_RETENTION_DAYS', 90),
+        // Coalesce : au plus 1 événement par identité+type par fenêtre (borne les
+        // écritures sous flood). 0 = pas de dédup (une écriture par détection).
+        'dedup_seconds' => (int) env('WAFY_STATS_DEDUP_SECONDS', 10),
     ],
 
     'notifications' => [

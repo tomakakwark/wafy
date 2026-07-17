@@ -39,7 +39,7 @@ class ManageRules extends Command
     {
         $ids = cache()->get(self::CACHE_KEY, []);
 
-        return is_array($ids) ? array_values(array_unique(array_map('strval', $ids))) : [];
+        return is_array($ids) ? array_values(array_unique(array_map('strval', array_filter($ids, 'is_scalar')))) : [];
     }
 
     private function listRules()

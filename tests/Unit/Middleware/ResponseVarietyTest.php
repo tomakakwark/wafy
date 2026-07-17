@@ -75,4 +75,16 @@ class ResponseVarietyTest extends TestCase
         $this->attack()->assertStatus(403);
         $this->assertGreaterThanOrEqual(0.9, microtime(true) - $start);
     }
+
+    /** @test */
+    public function the_tarpit_never_applies_to_an_already_banned_ip()
+    {
+        // A banned IP must get the cheapest 403 (no tarpit) so it can't pin workers.
+        config(['wafy.response.tarpit_seconds' => 3]);
+        \Bdsa\Wafy\Models\BannedIp::create(['ip_address' => '127.0.0.1', 'banned_until' => now()->addDay()]);
+
+        $start = microtime(true);
+        $this->get('/waf?q=hello')->assertStatus(403); // early-ban-exit, no tarpit
+        $this->assertLessThan(1.5, microtime(true) - $start);
+    }
 }

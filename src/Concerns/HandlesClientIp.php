@@ -67,6 +67,13 @@ trait HandlesClientIp
             return; // one read, then out — no DB touched when off
         }
 
+        // Coalesce writes: at most one row per identity+event per dedup window, so
+        // a flood cannot amplify into unbounded INSERTs. add() is atomic.
+        $window = max(0, (int) config('wafy.stats.dedup_seconds', 10));
+        if ($window > 0 && !cache()->add('wafy:evt:' . $event . ':' . $identity, 1, $window)) {
+            return;
+        }
+
         try {
             $path = '/' . ltrim($request->path(), '/');
             if (strlen($path) > 512) {
@@ -93,12 +100,33 @@ trait HandlesClientIp
             return null;
         }
 
-        try {
-            $c = $this->geoIpResolver()->country($ip);
-            return $c !== null ? strtoupper(substr((string) $c, 0, 2)) : null;
-        } catch (\Throwable $e) {
+        return $this->resolveCountryOnce($ip);
+    }
+
+    /** @var array<string,?string> per-request country memo (shared geo policy + stats). */
+    private $wafyCountryMemo = [];
+
+    /**
+     * Resolve (and memoize for this request) the client's ISO country, so the
+     * geo policy and the stats event don't each hit the resolver.
+     */
+    protected function resolveCountryOnce(?string $ip): ?string
+    {
+        if (empty($ip)) {
             return null;
         }
+        if (array_key_exists($ip, $this->wafyCountryMemo)) {
+            return $this->wafyCountryMemo[$ip];
+        }
+
+        try {
+            $c = $this->geoIpResolver()->country($ip);
+            $c = $c !== null ? strtoupper(substr((string) $c, 0, 2)) : null;
+        } catch (\Throwable $e) {
+            $c = null;
+        }
+
+        return $this->wafyCountryMemo[$ip] = $c;
     }
     /**
      * Resolve a configurable Wafy response message. The configured value may be
@@ -305,7 +333,7 @@ trait HandlesClientIp
             // Country allow/deny list.
             $countries = array_map('strtoupper', array_map('strval', (array) config('wafy.geoip.countries', [])));
             if (!empty($countries)) {
-                $country = $resolver->country($ip); // null => unknown
+                $country = $this->resolveCountryOnce($ip); // memoized (also reused by stats)
                 $mode = config('wafy.geoip.mode', 'deny');
 
                 if ($mode === 'allow') {

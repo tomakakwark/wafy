@@ -49,6 +49,18 @@ class ObservabilityTest extends TestCase
     }
 
     /** @test */
+    public function stats_events_are_deduped_within_the_window()
+    {
+        // Log mode -> no ban -> both requests reach recordEvent; dedup keeps 1.
+        config(['wafy.stats.enabled' => true, 'wafy.stats.dedup_seconds' => 60, 'wafy.action' => 'log']);
+
+        $this->get('/waf?q=' . urlencode('UNION SELECT 1'))->assertStatus(200);
+        $this->get('/waf?q=' . urlencode('UNION SELECT 1'))->assertStatus(200);
+
+        $this->assertSame(1, WafyEvent::where('event', 'logged')->count());
+    }
+
+    /** @test */
     public function it_emits_structured_log_context_on_detection()
     {
         Log::spy();
