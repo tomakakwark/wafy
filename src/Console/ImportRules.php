@@ -13,6 +13,7 @@ class ImportRules extends Command
         {--severity= : severity par défaut (info|low|medium|high|critical)}
         {--fields= : restreindre à des sujets (liste séparée par des virgules)}
         {--replace : remplacer le fichier importé au lieu de fusionner}
+        {--allow-php : autoriser une source .php (elle est EXÉCUTÉE via require)}
         {--dry-run : afficher sans écrire}';
 
     protected $description = 'Importer des règles de détection depuis un fichier externe (.php/.json/.txt).';
@@ -22,6 +23,13 @@ class ImportRules extends Command
         $source = (string) $this->argument('source');
         if (!is_file($source) || !is_readable($source)) {
             $this->error('Source introuvable : ' . $source);
+            return 1;
+        }
+
+        // A .php source is EXECUTED (require) to read its array — refuse unless
+        // the operator explicitly acknowledges it. Prefer .json/.txt for untrusted input.
+        if (strtolower(pathinfo($source, PATHINFO_EXTENSION)) === 'php' && !$this->option('allow-php')) {
+            $this->error('Une source .php est exécutée (require). Confirmez avec --allow-php, ou convertissez en .json/.txt.');
             return 1;
         }
 

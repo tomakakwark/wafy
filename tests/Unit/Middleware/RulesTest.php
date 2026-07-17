@@ -19,12 +19,14 @@ class RulesTest extends TestCase
     /** @test */
     public function a_bundled_pack_is_off_until_enabled_then_loads()
     {
-        $payload = '/waf?x=' . urlencode("assert(\$_GET['c'])");
+        // assert( and /etc/hosts match no CORE rule but two conservative pack
+        // rules (2+2 = 4 >= threshold).
+        $payload = '/waf?x=' . urlencode('assert(1)') . '&f=' . urlencode('/etc/hosts');
 
-        // Off by default: assert()/$_GET[ are not core rules -> passes.
+        // Off by default -> passes.
         $this->get($payload)->assertStatus(200);
 
-        // Enabled: two pack rules (3+3) cross the threshold -> blocked.
+        // Enabled -> the two pack signals cross the threshold.
         config(['wafy.rule_packs' => ['owasp-crs']]);
         $this->get($payload)->assertStatus(403);
     }
@@ -34,8 +36,33 @@ class RulesTest extends TestCase
     {
         config(['wafy.rule_packs' => ['owasp-crs']]);
 
-        // crs.930.os_files scores 3 (< threshold 4) -> corroboration required.
+        // crs.930.os_files scores 2 (< threshold 4) -> corroboration required.
         $this->get('/waf?f=' . urlencode('/etc/hosts'))->assertStatus(200);
+    }
+
+    /** @test */
+    public function the_pack_does_not_block_a_benign_php_code_paste()
+    {
+        config(['wafy.rule_packs' => ['owasp-crs']]);
+
+        // $_GET[ (1) + assert( (2) = 3 < threshold: a legit code paste passes.
+        $this->postJson('/waf', ['snippet' => "\$id = \$_GET['id']; assert(is_int(\$id));"])
+            ->assertStatus(200);
+    }
+
+    /** @test */
+    public function a_pattern_less_config_entry_neutralises_a_pack_rule_by_id()
+    {
+        config([
+            'wafy.rule_packs' => ['owasp-crs'],
+            'wafy.rules' => array_merge((array) config('wafy.rules'), [
+                ['id' => 'crs.930.os_files', 'score' => 0], // neutralise by id, no pattern
+            ]),
+        ]);
+
+        // os_files (now 0) + assert (2) = 2 < 4 -> passes (rule really neutralised).
+        $this->get('/waf?x=' . urlencode('assert(1)') . '&f=' . urlencode('/etc/hosts'))
+            ->assertStatus(200);
     }
 
     /** @test */
@@ -95,6 +122,18 @@ class RulesTest extends TestCase
         $this->get('/waf?q=hello-MYSECRETATTACKTOKEN-world')->assertStatus(403);
 
         @unlink($out);
+        @unlink($src);
+    }
+
+    /** @test */
+    public function importing_a_php_source_requires_allow_php()
+    {
+        $src = sys_get_temp_dir() . '/wafy-src-' . uniqid() . '.php';
+        file_put_contents($src, "<?php return [['id' => 'x.one', 'pattern' => '/xzq/']];");
+
+        $this->artisan('wafy:rules:import', ['source' => $src])->assertExitCode(1); // refused
+        $this->artisan('wafy:rules:import', ['source' => $src, '--allow-php' => true, '--dry-run' => true])->assertExitCode(0);
+
         @unlink($src);
     }
 }

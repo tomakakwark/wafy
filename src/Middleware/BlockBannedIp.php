@@ -58,9 +58,11 @@ class BlockBannedIp
                     return $next($request);
                 }
 
+                // Already banned -> cheapest 403, NO tarpit (a banned attacker
+                // must not be able to pin the worker pool via the tarpit sleep).
                 return is_null($bannedIp->banned_until)
-                    ? $this->wafyBlock('banned_permanent', 'Votre IP est bannie définitivement.', 'banned', 403)
-                    : $this->wafyBlock('banned_temporary', 'Votre IP est temporairement bannie.', 'banned', 403);
+                    ? $this->wafyBlock('banned_permanent', 'Votre IP est bannie définitivement.', 'banned', 403, false)
+                    : $this->wafyBlock('banned_temporary', 'Votre IP est temporairement bannie.', 'banned', 403, false);
             }
 
             // Ban temporaire expiré. En mode backoff, on GARDE la ligne pour que

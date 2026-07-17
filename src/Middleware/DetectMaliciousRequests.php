@@ -44,7 +44,9 @@ class DetectMaliciousRequests
             try {
                 $existing = BannedIp::forIp($identity)->first();
                 if ($existing && $existing->isActive()) {
-                    return $this->wafyBlock('banned', 'Votre IP est bannie.', 'banned', 403);
+                    // Already banned -> cheapest possible 403, NO tarpit (a banned
+                    // attacker must not be able to pin workers via the tarpit).
+                    return $this->wafyBlock('banned', 'Votre IP est bannie.', 'banned', 403, false);
                 }
                 if (!$existing) {
                     $this->rememberClean($identity);
@@ -373,6 +375,18 @@ class DetectMaliciousRequests
             $byId[$rule['id']] = $rule;
         }
         foreach ((array) config('wafy.rules', []) as $i => $rule) {
+            // Pattern-less override: ['id'=>…, 'score'=>0|…, 'enabled'=>false]
+            // tweaks/neutralises an existing pack/imported rule by id.
+            if (is_array($rule) && !empty($rule['id']) && empty($rule['pattern']) && isset($byId[$rule['id']])) {
+                if (array_key_exists('score', $rule)) {
+                    $byId[$rule['id']]['score'] = (int) $rule['score'];
+                }
+                if (array_key_exists('enabled', $rule)) {
+                    $byId[$rule['id']]['enabled'] = ($rule['enabled'] !== false);
+                }
+                continue;
+            }
+
             $norm = $this->normalizeRule($rule, 'rule_' . $i);
             if ($norm !== null) {
                 $byId[$norm['id']] = $norm;
@@ -449,7 +463,9 @@ class DetectMaliciousRequests
             return [];
         }
 
-        return array_flip(array_map('strval', array_values($ids)));
+        // Only scalar ids; a poisoned (nested) cache value must not raise a
+        // warning that a strict error handler could turn into a 500.
+        return array_flip(array_map('strval', array_filter(array_values($ids), 'is_scalar')));
     }
 
     /** Numeric rank of a severity string (0 = unset/unknown). */
@@ -522,20 +538,31 @@ class DetectMaliciousRequests
         return function_exists('storage_path') ? storage_path('app/wafy/imported-rules.php') : null;
     }
 
+    /** Per-process cache of parsed rule files, keyed by realpath + mtime. */
+    private static $ruleFileCache = [];
+
     private function readRuleFile(?string $path): array
     {
         if ($path === null) {
             return [];
         }
 
+        // Memoize by path+mtime so the pack/imported files are read & compiled at
+        // most once per worker (not on every request); a changed mtime reloads.
+        $mtime = @filemtime($path);
+        $key = $path . '@' . ($mtime === false ? '0' : $mtime);
+        if (isset(self::$ruleFileCache[$key])) {
+            return self::$ruleFileCache[$key];
+        }
+
         try {
             $data = require $path; // file just returns an array
         } catch (\Throwable $e) {
             Log::warning('Wafy: rule file load failed ' . $path . ': ' . $e->getMessage());
-            return [];
+            return self::$ruleFileCache[$key] = [];
         }
 
-        return is_array($data) ? $data : [];
+        return self::$ruleFileCache[$key] = (is_array($data) ? $data : []);
     }
 
     /**
