@@ -38,6 +38,17 @@ class PruneBans extends Command
             $this->info("{$old} ban(s) plus ancien(s) que " . (int) $days . " jour(s) supprimé(s).");
         }
 
+        // 3. Rétention des événements de stats (append-only), si activés.
+        $statsRetention = (int) config('wafy.stats.retention_days', 90);
+        if (config('wafy.stats.enabled', false) && $statsRetention > 0) {
+            try {
+                $purged = \Bdsa\Wafy\Models\WafyEvent::where('created_at', '<', now()->subDays($statsRetention))->delete();
+                $this->info("{$purged} événement(s) de stats plus vieux que {$statsRetention} jour(s) supprimé(s).");
+            } catch (\Throwable $e) {
+                // table absente / non migrée : on ignore
+            }
+        }
+
         return 0;
     }
 }

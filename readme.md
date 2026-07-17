@@ -16,8 +16,11 @@
 - 📈 **Exponential-backoff bans**: repeat offenders escalate automatically.
 - ⏱️ **Temporary & Permanent Bans**: Configurable durations, IPv6 `/64` aware.
 - 🔔 **Notifications**: Mail, Slack, Discord, Teams (+ `wafy:test-notification`).
+- 🧩 **Rule management**: bundled OWASP-CRS-inspired pack, `wafy:rules:import`, per-rule enable/disable & severity.
+- 📊 **Observability**: structured JSON/SIEM logging + `wafy:stats` telemetry dashboard.
+- 🖼️ **Response variety**: JSON, HTML challenge page, or content-negotiated `auto`, with an optional tarpit.
 - ⚙️ **Customizable**: your own scored rules, configurable/localizable messages & status codes.
-- 🖥️ **Artisan Commands**: manage bans, prune (GDPR retention), toggle mode via CLI.
+- 🖥️ **Artisan Commands**: manage bans, prune, rules, stats, notifications via CLI.
 
 ---
 
@@ -109,13 +112,31 @@ Manage banned IPs directly from the terminal:
   ```
   Reports success/failure per channel and skips channels with no destination configured.
 
-- **Prune expired / old bans** (also enforces GDPR retention):
+- **Prune expired / old bans** (also enforces GDPR retention + stats retention):
   ```bash
   php artisan wafy:prune                # delete expired temporary bans
   php artisan wafy:prune --days=90      # also delete bans older than 90 days
   ```
   Schedule it in `app/Console/Kernel.php`: `$schedule->command('wafy:prune')->daily();`
   Set `retention_days` in config to apply a default retention without `--days`.
+
+- **Manage detection rules** (severity, runtime enable/disable):
+  ```bash
+  php artisan wafy:rule list
+  php artisan wafy:rule disable sqli.union_select   # runtime, cache-backed
+  php artisan wafy:rule enable  sqli.union_select
+  ```
+  Enable the bundled OWASP-CRS-inspired pack with `rule_packs => ['owasp-crs']`.
+
+- **Import external rules** into the active rule set:
+  ```bash
+  php artisan wafy:rules:import path/to/rules.php   # .php | .json | .txt (one regex/line)
+  ```
+
+- **Stats dashboard** (requires `stats.enabled`):
+  ```bash
+  php artisan wafy:stats --days=7 --top=10 [--json]
+  ```
 
 > **ℹ️ Note — `wafy:mode` and `wafy:action` are temporary runtime overrides.**
 > These two commands store their state in the **cache**, so they are meant for

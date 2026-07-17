@@ -211,6 +211,22 @@ return [
     ],
 
     /*
+    | Forme de la réponse de blocage :
+    |   'json' (défaut, rétro-compatible) | 'view' (page HTML) | 'auto' (JSON pour
+    |   les clients API expectsJson/wantsJson, sinon la vue HTML pour un navigateur).
+    | Tarpit : délai borné (secondes) avant la réponse de blocage pour ralentir les
+    | scanners. 0 = désactivé (défaut). ⚠ un sleep() bloque un worker PHP-FPM toute
+    | sa durée — gardez-le petit ; jamais appliqué au 503 fail-open. Plafonné par
+    | tarpit_max.
+    */
+    'response' => [
+        'mode' => env('WAFY_RESPONSE_MODE', 'json'),
+        'view' => env('WAFY_RESPONSE_VIEW', 'wafy::blocked'),
+        'tarpit_seconds' => (int) env('WAFY_TARPIT_SECONDS', 0),
+        'tarpit_max' => (int) env('WAFY_TARPIT_MAX', 5),
+    ],
+
+    /*
     |--------------------------------------------------------------------------
     | GeoIP — filtrage par pays / ASN
     |--------------------------------------------------------------------------
@@ -236,6 +252,29 @@ return [
         'resolver' => null, // Closure|string|null
         'database' => env('WAFY_GEOIP_DB', ''),     // chemin base MaxMind pays
         'asn_database' => env('WAFY_GEOIP_ASN_DB', ''), // chemin base MaxMind ASN
+    ],
+
+    /*
+    | Logging structuré (SIEM). Chaque détection émet une ligne dont le CONTEXTE
+    | est un schéma stable et parsable (event, ip, path, method, score, rules[],
+    | action, decision) — sans jamais inclure la charge de l'attaquant. channel
+    | null = canal de log par défaut de l'app.
+    */
+    'logging' => [
+        'enabled' => (bool) env('WAFY_LOGGING_ENABLED', true),
+        'channel' => env('WAFY_LOGGING_CHANNEL', null),
+    ],
+
+    /*
+    | Statistiques : table append-only wafy_events écrite à chaque détection
+    | (OPT-IN, défaut false -> zéro surcoût quand désactivé). Alimente wafy:stats.
+    | stats.geo : résoudre le pays via GeoIP (si dispo). retention_days : purge
+    | par wafy:prune.
+    */
+    'stats' => [
+        'enabled' => (bool) env('WAFY_STATS_ENABLED', false),
+        'geo' => (bool) env('WAFY_STATS_GEO', true),
+        'retention_days' => (int) env('WAFY_STATS_RETENTION_DAYS', 90),
     ],
 
     'notifications' => [
